@@ -62,14 +62,17 @@ func watchSources(publicURL string, havePublic, discover bool, wake func()) <-ch
 		send(sourceUpdate{public: channels})
 		return true
 	}
+	haveLocal := false
 	runDiscovery := func() {
 		if !discover {
 			return
 		}
 		if local, ok := discoverFritz(); ok {
+			haveLocal = true
 			send(sourceUpdate{local: local, localSet: true})
-		} else {
-			send(sourceUpdate{localSet: true}) // none here; drop stale section
+		} else if haveLocal {
+			haveLocal = false
+			send(sourceUpdate{localSet: true}) // box went away; drop stale section
 		}
 	}
 
@@ -77,6 +80,7 @@ func watchSources(publicURL string, havePublic, discover bool, wake func()) <-ch
 		runDiscovery()
 		sig := networkSignature()
 		lastTry := time.Now()
+		lastDisc := time.Now()
 		for range time.Tick(3 * time.Second) {
 			newSig := networkSignature()
 			changed := newSig != sig
@@ -91,7 +95,11 @@ func watchSources(publicURL string, havePublic, discover bool, wake func()) <-ch
 					havePublic = true
 				}
 			}
-			if changed {
+			// Retry discovery while nothing was found: covers a Fritz!Box
+			// booting up and the Local Network permission being granted
+			// after launch.
+			if changed || (!haveLocal && time.Since(lastDisc) > 30*time.Second) {
+				lastDisc = time.Now()
 				runDiscovery()
 			}
 		}
