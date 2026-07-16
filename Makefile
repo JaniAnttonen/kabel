@@ -6,6 +6,13 @@ BUNDLE := $(DIST)/$(APP).app
 PKG_CONFIG_PATH ?= /opt/homebrew/lib/pkgconfig
 export PKG_CONFIG_PATH
 
+# Sign with a stable identity when available so TCC permissions (Local
+# Network!) survive rebuilds; ad-hoc otherwise.
+SIGN_ID := $(shell security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Developer ID Application/{print $$2; exit}')
+ifeq ($(SIGN_ID),)
+SIGN_ID := -
+endif
+
 .PHONY: run test app dmg clean
 
 run:
@@ -24,9 +31,9 @@ app:
 		-d $(BUNDLE)/Contents/Frameworks/ \
 		-p @executable_path/../Frameworks/
 	sh build/fix_rpaths.sh $(BUNDLE)/Contents/MacOS/kabel $(BUNDLE)/Contents/Frameworks/*.dylib
-	# install_name_tool invalidates signatures; ad-hoc re-sign everything (required on arm64)
-	find $(BUNDLE)/Contents/Frameworks -name '*.dylib' -exec codesign --force --sign - {} +
-	codesign --force --sign - $(BUNDLE)
+	# install_name_tool invalidates signatures; re-sign everything (required on arm64)
+	find $(BUNDLE)/Contents/Frameworks -name '*.dylib' -exec codesign --force --sign "$(SIGN_ID)" {} +
+	codesign --force --sign "$(SIGN_ID)" $(BUNDLE)
 	@echo "Built $(BUNDLE)"
 
 dmg: app

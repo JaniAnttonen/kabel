@@ -32,17 +32,27 @@ func discoverFritz() ([]Channel, bool) {
 	for _, host := range ssdpSatIPHosts(1500 * time.Millisecond) {
 		ssdp = append(ssdp, fmt.Sprintf("http://%s/dvb/m3u/tv.m3u", host))
 	}
-	return probeCandidates(ssdp)
+	if chs, ok := probeCandidates(ssdp); ok {
+		return chs, true
+	}
+	log.Printf("no Fritz!Box channel list found on this network")
+	return nil, false
 }
 
 func probeCandidates(urls []string) ([]Channel, bool) {
 	for _, u := range urls {
 		data, err := quickFetch(u, 2*time.Second)
-		if err != nil || !bytes.HasPrefix(bytes.TrimSpace(data), []byte("#EXTM3U")) {
+		if err != nil {
+			log.Printf("discovery probe %s: %v", u, err)
+			continue
+		}
+		if !bytes.HasPrefix(bytes.TrimSpace(data), []byte("#EXTM3U")) {
+			log.Printf("discovery probe %s: not an m3u playlist", u)
 			continue
 		}
 		channels, err := parseM3U(bytes.NewReader(data))
 		if err != nil {
+			log.Printf("discovery probe %s: %v", u, err)
 			continue
 		}
 		for i := range channels {
