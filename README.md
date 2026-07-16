@@ -51,7 +51,7 @@ With the channel list open:
 
 | Key | Action |
 | --- | --- |
-| ↑ ↓ PgUp PgDn | navigate |
+| ↑ ↓ PgUp PgDn / scroll | navigate |
 | type text | filter/search channels |
 | Enter | play selected channel |
 | Esc | clear search, then hide list |
@@ -62,8 +62,8 @@ While watching (list hidden):
 | Key | Action |
 | --- | --- |
 | Tab / Enter / Esc | show channel list |
-| ↑ ↓ | channel up/down |
-| ← → | volume |
+| ↑ ↓ / scroll | volume |
+| ← → | channel up/down |
 | m | mute |
 | Space | pause |
 | f | fullscreen |

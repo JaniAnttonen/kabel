@@ -39,6 +39,8 @@ type UI struct {
 
 	fullscreen             bool
 	winX, winY, winW, winH int
+
+	scrollAccum float64 // fractional scroll-wheel ticks not yet applied
 }
 
 func newUI(m *mpv.Mpv, win *glfw.Window, channels []Channel, loadErr error) *UI {
@@ -302,15 +304,13 @@ func (ui *UI) handleKey(key glfw.Key, mods glfw.ModifierKey) {
 	case glfw.KeyTab, glfw.KeyEnter, glfw.KeyKPEnter, glfw.KeyEscape:
 		ui.showList()
 	case glfw.KeyUp:
-		ui.step(1)
+		ui.addVolume(5)
 	case glfw.KeyDown:
-		ui.step(-1)
+		ui.addVolume(-5)
 	case glfw.KeyLeft:
-		ui.command("add", "volume", "-5")
-		ui.osdMsg("Volume ${volume}%")
+		ui.step(-1)
 	case glfw.KeyRight:
-		ui.command("add", "volume", "5")
-		ui.osdMsg("Volume ${volume}%")
+		ui.step(1)
 	case glfw.KeyM:
 		ui.command("cycle", "mute")
 		ui.osdMsg("Mute: ${mute}")
@@ -320,6 +320,29 @@ func (ui *UI) handleKey(key glfw.Key, mods glfw.ModifierKey) {
 		ui.toggleFullscreen()
 	case glfw.KeyQ:
 		ui.win.SetShouldClose(true)
+	}
+}
+
+func (ui *UI) addVolume(delta float64) {
+	ui.command("add", "volume", fmt.Sprintf("%.1f", delta))
+	ui.osdMsg("Volume ${volume}%")
+}
+
+// handleScroll navigates the channel list while it is open and controls the
+// volume while watching. yoff is in scroll-wheel ticks (fractional on
+// trackpads), positive = scroll up.
+func (ui *UI) handleScroll(yoff float64) {
+	if ui.visible {
+		ui.scrollAccum += yoff
+		steps := int(ui.scrollAccum)
+		if steps != 0 {
+			ui.scrollAccum -= float64(steps)
+			ui.moveSel(-steps)
+		}
+		return
+	}
+	if ui.current >= 0 {
+		ui.addVolume(2 * yoff)
 	}
 }
 

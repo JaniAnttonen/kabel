@@ -79,6 +79,7 @@ func main() {
 		"cache":                  "yes",
 		"demuxer-readahead-secs": "2",
 		"volume":                 "100",
+		"volume-max":             "100",
 	}
 	if logFile := os.Getenv("KABEL_MPV_LOG"); logFile != "" {
 		opts["log-file"] = logFile
@@ -126,6 +127,9 @@ func main() {
 	})
 	win.SetCharCallback(func(_ *glfw.Window, r rune) {
 		ui.handleChar(r)
+	})
+	win.SetScrollCallback(func(_ *glfw.Window, _, yoff float64) {
+		ui.handleScroll(yoff)
 	})
 
 	if err := m.Command([]string{"loadfile", idleSource}); err != nil {
