@@ -14,7 +14,7 @@ const (
 	osdResX    = 1280
 	osdResY    = 720
 	panelWidth = 500
-	maxRows    = 22
+	maxRows    = 20 // rows fit between header+status and footer at 28px each
 )
 
 type UI struct {

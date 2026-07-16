@@ -34,8 +34,10 @@ to reach the Fritz!Box.
 
 ## Usage
 
-By default the channel list is fetched from
-`http://192.168.178.1/dvb/m3u/tv.m3u`. Override with the `-url` flag or the
+By default the channel list is fetched from iptv-org's public catalog
+(`https://iptv-org.github.io/iptv/index.m3u`, ~13k free channels). For live
+DVB-C TV from the Fritz!Box, point it at the box instead, e.g.
+`-url http://192.168.178.1/dvb/m3u/tv.m3u`. Override with the `-url` flag or the
 `FRITZTV_M3U` environment variable. The last successfully fetched list is
 cached in `~/Library/Application Support/FritzTV/` so the app also starts
 when the box is unreachable. On network changes (e.g. switching from

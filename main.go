@@ -12,7 +12,10 @@ import (
 	"github.com/go-gl/glfw/v3.3/glfw"
 )
 
-const defaultM3UURL = "http://192.168.178.1/dvb/m3u/tv.m3u"
+// Default channel list: iptv-org's community catalog of publicly available
+// streams. Point -url / FRITZTV_M3U at the Fritz!Box for live DVB-C TV,
+// e.g. http://192.168.178.1/dvb/m3u/tv.m3u
+const defaultM3UURL = "https://iptv-org.github.io/iptv/index.m3u"
 
 // idleSource is a synthetic black video played while no channel is selected,
 // so the VO is configured and the OSD channel list has something to render on.
@@ -25,7 +28,7 @@ func init() {
 
 func main() {
 	log.SetFlags(log.Ltime)
-	urlFlag := flag.String("url", envOr("FRITZTV_M3U", defaultM3UURL), "URL of the Fritz!Box m3u channel list")
+	urlFlag := flag.String("url", envOr("FRITZTV_M3U", defaultM3UURL), "URL of the m3u channel list")
 	autoplay := flag.Bool("autoplay", false, "start playing the first channel immediately")
 	flag.Parse()
 
