@@ -147,6 +147,7 @@ func main() {
 	// Debug hook: KABEL_DEBUG_SHOT=/path.png captures window+OSD after 4s.
 	shotPath := os.Getenv("KABEL_DEBUG_SHOT")
 	shotAt := time.Now().Add(4 * time.Second)
+	animating := false
 
 	for !win.ShouldClose() {
 		if shotPath != "" && time.Now().After(shotAt) {
@@ -160,7 +161,13 @@ func main() {
 			}
 			shotPath = ""
 		}
-		glfw.WaitEventsTimeout(0.1)
+		// Tight timeout while UI animations run, relaxed when idle.
+		timeout := 0.1
+		if animating {
+			timeout = 1.0 / 120
+		}
+		glfw.WaitEventsTimeout(timeout)
+		animating = ui.tick()
 
 		select {
 		case channels := <-updates:

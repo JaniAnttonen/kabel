@@ -50,8 +50,48 @@ type UI struct {
 	fullscreen             bool
 	winX, winY, winW, winH int
 
-	scrollAccum float64     // fractional scroll-wheel ticks not yet applied
-	volTimer    *time.Timer // hides the volume indicator overlay
+	scrollAccum float64 // fractional scroll-wheel ticks not yet applied
+
+	panelPos *anim // panel slide: 0 = onscreen, -1 = offscreen
+	pillY    *anim // selection pill glide between rows
+
+	volShown     bool
+	volArc       *anim // displayed ring value sweep
+	volAlpha     *anim // ring fade in/out (0..1)
+	volDisplayed float64
+	volMuted     bool
+	volHideAt    time.Time
+}
+
+// anim is a single eased transition between two values.
+type anim struct {
+	from, to float64
+	start    time.Time
+	dur      time.Duration
+}
+
+func newAnim(from, to float64, dur time.Duration) *anim {
+	return &anim{from: from, to: to, start: time.Now(), dur: dur}
+}
+
+// at returns the eased (cubic ease-out) value at the given time.
+func (a *anim) at(now time.Time) float64 {
+	if a == nil {
+		return 0
+	}
+	t := now.Sub(a.start).Seconds() / a.dur.Seconds()
+	if t >= 1 {
+		return a.to
+	}
+	if t < 0 {
+		t = 0
+	}
+	p := 1 - math.Pow(1-t, 3)
+	return a.from + (a.to-a.from)*p
+}
+
+func (a *anim) done(now time.Time) bool {
+	return a == nil || now.Sub(a.start) >= a.dur
 }
 
 func newUI(m *mpv.Mpv, win *glfw.Window, channels []Channel, loadErr error) *UI {
@@ -87,13 +127,63 @@ func (ui *UI) setChannels(channels []Channel) {
 }
 
 func (ui *UI) showList() {
+	if !ui.visible {
+		start := -1.0
+		if ui.panelPos != nil { // reverse a hide mid-flight
+			start = ui.panelPos.at(time.Now())
+		}
+		ui.panelPos = newAnim(start, 0, 240*time.Millisecond)
+	}
 	ui.visible = true
 	ui.render()
 }
 
 func (ui *UI) hideList() {
+	if ui.visible {
+		start := 0.0
+		if ui.panelPos != nil {
+			start = ui.panelPos.at(time.Now())
+		}
+		ui.panelPos = newAnim(start, -1, 200*time.Millisecond)
+	}
 	ui.visible = false
 	ui.render()
+}
+
+// tick advances animations and re-renders the affected overlays. It returns
+// true while anything is still moving so the event loop can tighten its
+// timeout for smooth frames.
+func (ui *UI) tick() bool {
+	now := time.Now()
+	active := false
+
+	if ui.panelPos != nil || ui.pillY != nil {
+		if ui.panelPos.done(now) {
+			ui.panelPos = nil
+		}
+		if ui.pillY.done(now) {
+			ui.pillY = nil
+		}
+		ui.render()
+		active = ui.panelPos != nil || ui.pillY != nil
+	}
+
+	if ui.volShown {
+		fading := ui.volAlpha != nil && ui.volAlpha.to == 0
+		switch {
+		case !ui.volArc.done(now) || (ui.volAlpha != nil && !ui.volAlpha.done(now)):
+			ui.renderVolume(now)
+			active = true
+		case fading:
+			ui.setOverlayID(volumeOverlayID, "none", "")
+			ui.volShown = false
+			ui.volArc, ui.volAlpha = nil, nil
+		case now.After(ui.volHideAt):
+			ui.volAlpha = newAnim(1, 0, 220*time.Millisecond)
+			active = true
+		}
+	}
+	return active
 }
 
 func (ui *UI) applyFilter() {
@@ -111,6 +201,7 @@ func (ui *UI) applyFilter() {
 		ui.sel = 0
 	}
 	ui.clampScroll()
+	ui.pillY = nil // layout changed; don't glide across a reshuffle
 }
 
 func (ui *UI) clampScroll() {
@@ -129,6 +220,11 @@ func (ui *UI) moveSel(delta int) {
 	if len(ui.filtered) == 0 {
 		return
 	}
+	oldY := ui.pillTargetY()
+	if ui.pillY != nil {
+		oldY = ui.pillY.at(time.Now())
+	}
+	oldScroll := ui.scroll
 	ui.sel += delta
 	if ui.sel < 0 {
 		ui.sel = 0
@@ -137,7 +233,22 @@ func (ui *UI) moveSel(delta int) {
 		ui.sel = len(ui.filtered) - 1
 	}
 	ui.clampScroll()
+	if ui.scroll == oldScroll {
+		// Same viewport: glide the pill; on scroll jumps it snaps.
+		ui.pillY = newAnim(oldY, ui.pillTargetY(), 130*time.Millisecond)
+	} else {
+		ui.pillY = nil
+	}
 	ui.render()
+}
+
+// pillTargetY is the resting y of the selection pill in the current layout.
+func (ui *UI) pillTargetY() float64 {
+	firstRowLine := 3
+	if ui.status != "" {
+		firstRowLine++
+	}
+	return float64(lineY(firstRowLine + ui.sel - ui.scroll))
 }
 
 func (ui *UI) play(idx int) {
@@ -343,8 +454,9 @@ func (ui *UI) addVolume(delta float64) {
 	ui.showVolume()
 }
 
-// showVolume draws a circular volume indicator (progress ring with the
-// percentage centered) in the lower-right corner and fades it after 1.5s.
+// showVolume animates a circular volume indicator (progress ring with the
+// percentage centered) in the lower-right corner: fade in, sweep the arc to
+// the new value, fade out after a pause. tick() drives the frames.
 func (ui *UI) showVolume() {
 	vol, err := ui.m.GetProperty("volume", mpv.FormatDouble)
 	if err != nil {
@@ -355,27 +467,43 @@ func (ui *UI) showVolume() {
 	if mu, err := ui.m.GetProperty("mute", mpv.FormatFlag); err == nil {
 		muted, _ = mu.(bool)
 	}
-	ui.setOverlayID(volumeOverlayID, "ass-events", volumeASS(v, muted))
-	if ui.volTimer != nil {
-		ui.volTimer.Stop()
+	now := time.Now()
+	cur := 0.0 // first appearance sweeps up from zero
+	if ui.volShown {
+		cur = ui.volArc.at(now)
+		if ui.volAlpha != nil && ui.volAlpha.to == 0 { // reverse a fade-out
+			ui.volAlpha = newAnim(ui.volAlpha.at(now), 1, 120*time.Millisecond)
+		}
+	} else {
+		ui.volAlpha = newAnim(0, 1, 120*time.Millisecond)
 	}
-	// The callback runs off the main thread but only issues mpv commands,
-	// which are thread-safe; it must not touch other UI state.
-	ui.volTimer = time.AfterFunc(1500*time.Millisecond, func() {
-		ui.setOverlayID(volumeOverlayID, "none", "")
-	})
+	ui.volArc = newAnim(cur, v, 180*time.Millisecond)
+	ui.volDisplayed = v
+	ui.volMuted = muted
+	ui.volShown = true
+	ui.volHideAt = now.Add(1400 * time.Millisecond)
+	ui.renderVolume(now)
+}
+
+func (ui *UI) renderVolume(now time.Time) {
+	alpha := 1.0
+	if ui.volAlpha != nil {
+		alpha = ui.volAlpha.at(now)
+	}
+	ui.setOverlayID(volumeOverlayID, "ass-events", volumeASS(ui.volArc.at(now), ui.volMuted, alpha))
 }
 
 // volumeASS renders the indicator: backdrop disc, faint full ring, progress
 // arc from 12 o'clock, and the percentage (or mute mark) in the middle.
-func volumeASS(v float64, muted bool) string {
+// alpha (0..1) scales every element for the fade in/out.
+func volumeASS(v float64, muted bool, alpha float64) string {
 	const cx, cy = float64(osdResX - 100), float64(osdResY - 100)
 	const rOut, rIn = 46.0, 37.0
 	var b strings.Builder
-	fmt.Fprintf(&b, "{\\an7\\pos(0,0)\\bord0\\shad0\\1c&H101010&\\1a&H38&\\p1}%s{\\p0}\n",
-		circlePath(cx, cy, 58))
-	fmt.Fprintf(&b, "{\\an7\\pos(0,0)\\bord0\\shad0\\1c&H666666&\\1a&H90&\\p1}%s{\\p0}\n",
-		ringPath(cx, cy, rOut, rIn, 0, 360))
+	fmt.Fprintf(&b, "{\\an7\\pos(0,0)\\bord0\\shad0\\1c&H101010&%s\\p1}%s{\\p0}\n",
+		alphaTag(0x38, alpha), circlePath(cx, cy, 58))
+	fmt.Fprintf(&b, "{\\an7\\pos(0,0)\\bord0\\shad0\\1c&H666666&%s\\p1}%s{\\p0}\n",
+		alphaTag(0x90, alpha), ringPath(cx, cy, rOut, rIn, 0, 360))
 	color := "&HFFFFFF&"
 	label := fmt.Sprintf("%.0f%%", v)
 	if muted {
@@ -383,12 +511,25 @@ func volumeASS(v float64, muted bool) string {
 		label = "✕"
 	}
 	if v > 0 {
-		fmt.Fprintf(&b, "{\\an7\\pos(0,0)\\bord0\\shad0\\1c%s\\p1}%s{\\p0}\n",
-			color, ringPath(cx, cy, rOut, rIn, -90, -90+3.6*v))
+		fmt.Fprintf(&b, "{\\an7\\pos(0,0)\\bord0\\shad0\\1c%s%s\\p1}%s{\\p0}\n",
+			color, alphaTag(0, alpha), ringPath(cx, cy, rOut, rIn, -90, -90+3.6*v))
 	}
-	fmt.Fprintf(&b, "{\\an5\\pos(%.0f,%.0f)\\bord0\\shad0\\fs24\\b1\\1c&HFFFFFF&}%s\n",
-		cx, cy, label)
+	fmt.Fprintf(&b, "{\\an5\\pos(%.0f,%.0f)\\bord0\\shad0\\fs24\\b1\\1c&HFFFFFF&%s}%s\n",
+		cx, cy, alphaTag(0, alpha), label)
 	return b.String()
+}
+
+// alphaTag combines an element's base ASS transparency (0 = opaque,
+// 255 = invisible) with an animation visibility factor (1 = fully shown).
+func alphaTag(base int, visible float64) string {
+	if visible > 1 {
+		visible = 1
+	}
+	if visible < 0 {
+		visible = 0
+	}
+	a := 255 - int(float64(255-base)*visible)
+	return fmt.Sprintf("\\1a&H%02X&", a)
 }
 
 // arcSegs approximates a circular arc from a0 to a1 (degrees) with cubic
@@ -482,17 +623,25 @@ func (ui *UI) toggleFullscreen() {
 }
 
 // render pushes the channel list as an ASS overlay via mpv's osd-overlay
-// command, or removes it when hidden.
+// command, or removes it when hidden. While panelPos/pillY animations run,
+// tick() calls this every frame with interpolated offset/alpha.
 func (ui *UI) render() {
-	if !ui.visible {
+	now := time.Now()
+	if !ui.visible && ui.panelPos == nil {
 		ui.setOverlay("none", "")
 		return
 	}
+	frac := 0.0 // 0 = onscreen, -1 = offscreen left
+	if ui.panelPos != nil {
+		frac = ui.panelPos.at(now)
+	}
+	off := frac * float64(panelWidth+30)
+	vis := 1 + frac
 	var b strings.Builder
 
 	// Translucent panel background, drawn with ASS vector commands.
-	fmt.Fprintf(&b, "{\\an7\\pos(0,0)\\bord0\\shad0\\1c&H101010&\\1a&H30&\\p1}m 0 0 l %d 0 l %d %d l 0 %d{\\p0}\n",
-		panelWidth, panelWidth, osdResY, osdResY)
+	fmt.Fprintf(&b, "{\\an7\\pos(%.1f,0)\\bord0\\shad0\\1c&H101010&%s\\p1}m 0 0 l %d 0 l %d %d l 0 %d{\\p0}\n",
+		off, alphaTag(0x30, vis), panelWidth, panelWidth, osdResY, osdResY)
 
 	// Header: search filter and channel count. Monochrome; red is reserved
 	// for errors only.
@@ -506,17 +655,27 @@ func (ui *UI) render() {
 		headerColor = errorColor
 	}
 	line := 1
-	fmt.Fprintf(&b, "{\\an7\\pos(20,%d)\\bord0\\shad0\\fs22\\b1\\1c%s}%s\n", lineY(line), headerColor, header)
+	fmt.Fprintf(&b, "{\\an7\\pos(%.1f,%d)\\bord0\\shad0\\fs22\\b1\\1c%s%s}%s\n", 20+off, lineY(line), headerColor, alphaTag(0, vis), header)
 	line++
 	if ui.status != "" {
-		statusColor, statusAlpha := "&HFFFFFF&", "\\1a&H60&" // secondary label
+		statusColor, statusBase := "&HFFFFFF&", 0x60 // secondary label
 		if ui.statusErr {
-			statusColor, statusAlpha = errorColor, ""
+			statusColor, statusBase = errorColor, 0
 		}
-		fmt.Fprintf(&b, "{\\an7\\pos(20,%d)\\bord0\\shad0\\fs20\\1c%s%s}%s\n", lineY(line), statusColor, statusAlpha, escapeASS(truncate(ui.status, 52)))
+		fmt.Fprintf(&b, "{\\an7\\pos(%.1f,%d)\\bord0\\shad0\\fs20\\1c%s%s}%s\n", 20+off, lineY(line), statusColor, alphaTag(statusBase, vis), escapeASS(truncate(ui.status, 52)))
 		line++
 	}
 	line++ // spacer
+
+	// Selection pill: glides between rows while pillY animates.
+	if len(ui.filtered) > 0 {
+		pillTop := ui.pillTargetY()
+		if ui.pillY != nil {
+			pillTop = ui.pillY.at(now)
+		}
+		fmt.Fprintf(&b, "{\\an7\\pos(%.1f,0)\\bord0\\shad0\\1c&HFFFFFF&%s\\p1}m 10 %.1f l %d %.1f l %d %.1f l 10 %.1f{\\p0}\n",
+			off, alphaTag(0xD8, vis), pillTop-3, panelWidth-10, pillTop-3, panelWidth-10, pillTop+27, pillTop+27)
+	}
 
 	end := ui.scroll + maxRows
 	if end > len(ui.filtered) {
@@ -529,19 +688,15 @@ func (ui *UI) render() {
 			name += "  ●"
 		}
 		if row == ui.sel {
-			// Selection: translucent pill + bold + marker (shape and weight
-			// carry the state, not color).
-			y := lineY(line)
-			fmt.Fprintf(&b, "{\\an7\\pos(0,0)\\bord0\\shad0\\1c&HFFFFFF&\\1a&HD8&\\p1}m 10 %d l %d %d l %d %d l 10 %d{\\p0}\n",
-				y-3, panelWidth-10, y-3, panelWidth-10, y+27, y+27)
-			fmt.Fprintf(&b, "{\\an7\\pos(20,%d)\\bord0\\shad0\\fs24\\b1\\1c&HFFFFFF&}▶\\h%s\n", y, name)
+			// Selection: bold + marker (shape and weight carry the state).
+			fmt.Fprintf(&b, "{\\an7\\pos(%.1f,%d)\\bord0\\shad0\\fs24\\b1\\1c&HFFFFFF&%s}▶\\h%s\n", 20+off, lineY(line), alphaTag(0, vis), name)
 		} else {
-			fmt.Fprintf(&b, "{\\an7\\pos(20,%d)\\bord0\\shad0\\fs24\\1c&HFFFFFF&}\\h\\h%s\n", lineY(line), name)
+			fmt.Fprintf(&b, "{\\an7\\pos(%.1f,%d)\\bord0\\shad0\\fs24\\1c&HFFFFFF&%s}\\h\\h%s\n", 20+off, lineY(line), alphaTag(0, vis), name)
 		}
 		line++
 	}
 
-	fmt.Fprintf(&b, "{\\an7\\pos(20,%d)\\bord0\\shad0\\fs16\\1c&HAAAAAA&}↑↓ select   ⏎ play   Tab hide   f fullscreen   q quit\n", osdResY-28)
+	fmt.Fprintf(&b, "{\\an7\\pos(%.1f,%d)\\bord0\\shad0\\fs16\\1c&HAAAAAA&%s}↑↓ select   ⏎ play   Tab hide   f fullscreen   q quit\n", 20+off, osdResY-28, alphaTag(0, vis))
 
 	ui.setOverlay("ass-events", b.String())
 }
