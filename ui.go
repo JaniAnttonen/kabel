@@ -22,6 +22,10 @@ const (
 	volumeOverlayID int64 = 2
 )
 
+// errorColor is the only accent in the UI (ASS BGR for system red #FF453A);
+// everything else is monochrome per the HIG's guidance for media apps.
+const errorColor = "&H3A45FF&"
+
 type UI struct {
 	m   *mpv.Mpv
 	win *glfw.Window
@@ -34,9 +38,10 @@ type UI struct {
 	sel      int   // selection within filtered
 	scroll   int   // first visible row within filtered
 
-	visible bool
-	current int // index into channels currently playing, -1 = none
-	status  string
+	visible   bool
+	current   int // index into channels currently playing, -1 = none
+	status    string
+	statusErr bool // status describes a failure (rendered in red)
 
 	rtspTCP    bool   // use RTSP-over-TCP (set after a failed UDP attempt)
 	retried    bool   // current play attempt is already the TCP retry
@@ -157,11 +162,13 @@ func (ui *UI) playAttempt(idx int, isRetry bool) {
 	ui.retried = isRetry
 	if err := ui.m.Command([]string{"loadfile", c.URL}); err != nil {
 		ui.status = "Failed to start: " + c.Name
+		ui.statusErr = true
 		log.Printf("loadfile %s: %v", c.URL, err)
 		ui.render()
 		return
 	}
 	ui.current = idx
+	ui.statusErr = false
 	if isRetry {
 		ui.status = "Retrying " + c.Name + " via TCP…"
 	} else {
@@ -190,6 +197,7 @@ func (ui *UI) step(delta int) {
 func (ui *UI) playbackStarted() {
 	if ui.current >= 0 {
 		ui.status = ""
+		ui.statusErr = false
 		ui.render()
 	}
 }
@@ -227,6 +235,7 @@ func (ui *UI) playbackEnded(ef mpv.EventEndFile) {
 		msg += " — " + ef.Error.Error()
 	}
 	ui.status = msg
+	ui.statusErr = true
 	ui.current = -1
 	ui.win.SetTitle("kabel")
 	if err := ui.m.Command([]string{"loadfile", idleSource}); err != nil {
@@ -367,10 +376,10 @@ func volumeASS(v float64, muted bool) string {
 		circlePath(cx, cy, 58))
 	fmt.Fprintf(&b, "{\\an7\\pos(0,0)\\bord0\\shad0\\1c&H666666&\\1a&H90&\\p1}%s{\\p0}\n",
 		ringPath(cx, cy, rOut, rIn, 0, 360))
-	color := "&H00D7FF&"
+	color := "&HFFFFFF&"
 	label := fmt.Sprintf("%.0f%%", v)
 	if muted {
-		color = "&H5555AA&"
+		color = "&H888888&"
 		label = "✕"
 	}
 	if v > 0 {
@@ -485,19 +494,26 @@ func (ui *UI) render() {
 	fmt.Fprintf(&b, "{\\an7\\pos(0,0)\\bord0\\shad0\\1c&H101010&\\1a&H30&\\p1}m 0 0 l %d 0 l %d %d l 0 %d{\\p0}\n",
 		panelWidth, panelWidth, osdResY, osdResY)
 
-	// Header: search filter and channel count.
+	// Header: search filter and channel count. Monochrome; red is reserved
+	// for errors only.
 	header := fmt.Sprintf("%d channels — type to search", len(ui.channels))
+	headerColor := "&HFFFFFF&"
 	if len(ui.filter) > 0 {
 		header = fmt.Sprintf("Search: %s_  (%d/%d)", escapeASS(string(ui.filter)), len(ui.filtered), len(ui.channels))
 	}
 	if ui.loadErr != nil {
 		header = "Channel list unavailable — check URL / network"
+		headerColor = errorColor
 	}
 	line := 1
-	fmt.Fprintf(&b, "{\\an7\\pos(20,%d)\\bord0\\shad0\\fs22\\b1\\1c&H00D7FF&}%s\n", lineY(line), header)
+	fmt.Fprintf(&b, "{\\an7\\pos(20,%d)\\bord0\\shad0\\fs22\\b1\\1c%s}%s\n", lineY(line), headerColor, header)
 	line++
 	if ui.status != "" {
-		fmt.Fprintf(&b, "{\\an7\\pos(20,%d)\\bord0\\shad0\\fs20\\1c&H8080FF&}%s\n", lineY(line), escapeASS(ui.status))
+		statusColor, statusAlpha := "&HFFFFFF&", "\\1a&H60&" // secondary label
+		if ui.statusErr {
+			statusColor, statusAlpha = errorColor, ""
+		}
+		fmt.Fprintf(&b, "{\\an7\\pos(20,%d)\\bord0\\shad0\\fs20\\1c%s%s}%s\n", lineY(line), statusColor, statusAlpha, escapeASS(truncate(ui.status, 52)))
 		line++
 	}
 	line++ // spacer
@@ -509,20 +525,34 @@ func (ui *UI) render() {
 	for row := ui.scroll; row < end; row++ {
 		idx := ui.filtered[row]
 		name := escapeASS(ui.channels[idx].Name)
-		color, marker := "&HFFFFFF&", "\\h\\h"
-		if row == ui.sel {
-			color, marker = "&H00D7FF&", "▶\\h"
-		}
 		if idx == ui.current {
 			name += "  ●"
 		}
-		fmt.Fprintf(&b, "{\\an7\\pos(20,%d)\\bord0\\shad0\\fs24\\1c%s}%s%s\n", lineY(line), color, marker, name)
+		if row == ui.sel {
+			// Selection: translucent pill + bold + marker (shape and weight
+			// carry the state, not color).
+			y := lineY(line)
+			fmt.Fprintf(&b, "{\\an7\\pos(0,0)\\bord0\\shad0\\1c&HFFFFFF&\\1a&HD8&\\p1}m 10 %d l %d %d l %d %d l 10 %d{\\p0}\n",
+				y-3, panelWidth-10, y-3, panelWidth-10, y+27, y+27)
+			fmt.Fprintf(&b, "{\\an7\\pos(20,%d)\\bord0\\shad0\\fs24\\b1\\1c&HFFFFFF&}▶\\h%s\n", y, name)
+		} else {
+			fmt.Fprintf(&b, "{\\an7\\pos(20,%d)\\bord0\\shad0\\fs24\\1c&HFFFFFF&}\\h\\h%s\n", lineY(line), name)
+		}
 		line++
 	}
 
 	fmt.Fprintf(&b, "{\\an7\\pos(20,%d)\\bord0\\shad0\\fs16\\1c&HAAAAAA&}↑↓ select   ⏎ play   Tab hide   f fullscreen   q quit\n", osdResY-28)
 
 	ui.setOverlay("ass-events", b.String())
+}
+
+// truncate limits s to n runes so long status lines stay inside the panel.
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-1]) + "…"
 }
 
 func lineY(line int) int {
