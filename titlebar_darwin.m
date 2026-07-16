@@ -76,6 +76,10 @@ void kabelStyleTitlebar(void *win) {
             Class glassCls = NSClassFromString(@"NSGlassEffectView");
             if (glassCls != nil) { // macOS 26+ Liquid Glass
                 glass = [[passthroughClass(glassCls) alloc] initWithFrame:tb.bounds];
+                @try { // square strip, no capsule rounding at the bottom
+                    [glass setValue:@0.0 forKey:@"cornerRadius"];
+                } @catch (NSException *e) {
+                }
             } else {
                 NSVisualEffectView *ev = [[passthroughClass([NSVisualEffectView class]) alloc] initWithFrame:tb.bounds];
                 ev.material = NSVisualEffectMaterialTitlebar;
