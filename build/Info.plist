@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>FritzTV</string>
+	<string>kabel</string>
 	<key>CFBundleDisplayName</key>
-	<string>Fritz!Box TV</string>
+	<string>kabel</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.jantto.fritztv</string>
+	<string>com.jantto.kabel</string>
 	<key>CFBundleExecutable</key>
-	<string>fritztv</string>
+	<string>kabel</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -23,7 +23,7 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Fritz!Box TV loads the channel list and live TV streams from your Fritz!Box on the local network.</string>
+	<string>kabel loads channel lists and live TV streams from devices on your local network, such as a Fritz!Box cable modem.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

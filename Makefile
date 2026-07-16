@@ -1,4 +1,4 @@
-APP    := FritzTV
+APP    := kabel
 DIST   := dist
 BUNDLE := $(DIST)/$(APP).app
 
@@ -17,13 +17,13 @@ test:
 app:
 	rm -rf $(BUNDLE)
 	mkdir -p $(BUNDLE)/Contents/MacOS $(BUNDLE)/Contents/Frameworks
-	go build -tags pkgconfig -o $(BUNDLE)/Contents/MacOS/fritztv .
+	go build -tags pkgconfig -o $(BUNDLE)/Contents/MacOS/kabel .
 	cp build/Info.plist $(BUNDLE)/Contents/Info.plist
 	dylibbundler -od -cd -b \
-		-x $(BUNDLE)/Contents/MacOS/fritztv \
+		-x $(BUNDLE)/Contents/MacOS/kabel \
 		-d $(BUNDLE)/Contents/Frameworks/ \
 		-p @executable_path/../Frameworks/
-	sh build/fix_rpaths.sh $(BUNDLE)/Contents/MacOS/fritztv $(BUNDLE)/Contents/Frameworks/*.dylib
+	sh build/fix_rpaths.sh $(BUNDLE)/Contents/MacOS/kabel $(BUNDLE)/Contents/Frameworks/*.dylib
 	# install_name_tool invalidates signatures; ad-hoc re-sign everything (required on arm64)
 	find $(BUNDLE)/Contents/Frameworks -name '*.dylib' -exec codesign --force --sign - {} +
 	codesign --force --sign - $(BUNDLE)
@@ -39,4 +39,4 @@ dmg: app
 	@echo "Built $(DIST)/$(APP).dmg"
 
 clean:
-	rm -rf $(DIST) fritztv
+	rm -rf $(DIST) kabel fritztv

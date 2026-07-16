@@ -1,4 +1,4 @@
-module fritztv
+module kabel
 
 go 1.25.7
 

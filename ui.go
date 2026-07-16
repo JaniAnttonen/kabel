@@ -159,7 +159,7 @@ func (ui *UI) playAttempt(idx int, isRetry bool) {
 	} else {
 		ui.status = "Tuning " + c.Name + "…"
 	}
-	ui.win.SetTitle(c.Name + " — Fritz!Box TV")
+	ui.win.SetTitle(c.Name + " — kabel")
 	ui.hideList()
 }
 
@@ -220,7 +220,7 @@ func (ui *UI) playbackEnded(ef mpv.EventEndFile) {
 	}
 	ui.status = msg
 	ui.current = -1
-	ui.win.SetTitle("Fritz!Box TV")
+	ui.win.SetTitle("kabel")
 	if err := ui.m.Command([]string{"loadfile", idleSource}); err != nil {
 		log.Printf("idle source: %v", err)
 	}
@@ -367,7 +367,7 @@ func (ui *UI) render() {
 		header = fmt.Sprintf("Search: %s_  (%d/%d)", escapeASS(string(ui.filter)), len(ui.filtered), len(ui.channels))
 	}
 	if ui.loadErr != nil {
-		header = "Channel list unavailable — check Fritz!Box"
+		header = "Channel list unavailable — check URL / network"
 	}
 	line := 1
 	fmt.Fprintf(&b, "{\\an7\\pos(20,%d)\\bord0\\shad0\\fs22\\b1\\1c&H00D7FF&}%s\n", lineY(line), header)

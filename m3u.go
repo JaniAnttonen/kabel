@@ -82,7 +82,7 @@ func cacheDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, "Library", "Application Support", "FritzTV"), nil
+	return filepath.Join(home, "Library", "Application Support", "kabel"), nil
 }
 
 // loadChannels fetches the playlist from url, caching the raw bytes on

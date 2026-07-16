@@ -13,7 +13,7 @@ import (
 )
 
 // Default channel list: iptv-org's community catalog of publicly available
-// streams. Point -url / FRITZTV_M3U at the Fritz!Box for live DVB-C TV,
+// streams. Point -url / KABEL_M3U at the Fritz!Box for live DVB-C TV,
 // e.g. http://192.168.178.1/dvb/m3u/tv.m3u
 const defaultM3UURL = "https://iptv-org.github.io/iptv/index.m3u"
 
@@ -28,7 +28,7 @@ func init() {
 
 func main() {
 	log.SetFlags(log.Ltime)
-	urlFlag := flag.String("url", envOr("FRITZTV_M3U", defaultM3UURL), "URL of the m3u channel list")
+	urlFlag := flag.String("url", envOr("KABEL_M3U", defaultM3UURL), "URL of the m3u channel list")
 	autoplay := flag.Bool("autoplay", false, "start playing the first channel immediately")
 	flag.Parse()
 
@@ -52,7 +52,7 @@ func main() {
 	glfw.WindowHint(glfw.ContextVersionMinor, 2)
 	glfw.WindowHint(glfw.OpenGLProfile, glfw.OpenGLCoreProfile)
 	glfw.WindowHint(glfw.OpenGLForwardCompatible, glfw.True)
-	win, err := glfw.CreateWindow(1280, 720, "Fritz!Box TV", nil, nil)
+	win, err := glfw.CreateWindow(1280, 720, "kabel", nil, nil)
 	if err != nil {
 		log.Fatalf("create window: %v", err)
 	}
@@ -80,7 +80,7 @@ func main() {
 		"demuxer-readahead-secs": "2",
 		"volume":                 "100",
 	}
-	if logFile := os.Getenv("FRITZTV_MPV_LOG"); logFile != "" {
+	if logFile := os.Getenv("KABEL_MPV_LOG"); logFile != "" {
 		opts["log-file"] = logFile
 	}
 	for k, v := range opts {
@@ -140,8 +140,8 @@ func main() {
 	// tethering and the Fritz!Box network) or while it never loaded.
 	updates := watchChannels(*urlFlag, loadErr == nil, glfw.PostEmptyEvent)
 
-	// Debug hook: FRITZTV_DEBUG_SHOT=/path.png captures window+OSD after 4s.
-	shotPath := os.Getenv("FRITZTV_DEBUG_SHOT")
+	// Debug hook: KABEL_DEBUG_SHOT=/path.png captures window+OSD after 4s.
+	shotPath := os.Getenv("KABEL_DEBUG_SHOT")
 	shotAt := time.Now().Add(4 * time.Second)
 
 	for !win.ShouldClose() {
