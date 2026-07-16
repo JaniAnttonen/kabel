@@ -337,6 +337,7 @@ func (ui *UI) toggleFullscreen() {
 	if ui.fullscreen {
 		ui.win.SetMonitor(nil, ui.winX, ui.winY, ui.winW, ui.winH, 0)
 		ui.fullscreen = false
+		styleTitlebar(ui.win) // GLFW rebuilds the style mask on mode switches
 		return
 	}
 	ui.winX, ui.winY = ui.win.GetPos()

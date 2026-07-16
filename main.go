@@ -58,6 +58,7 @@ func main() {
 	}
 	win.MakeContextCurrent()
 	glfw.SwapInterval(1)
+	styleTitlebar(win)
 
 	m := mpv.New()
 	opts := map[string]string{
