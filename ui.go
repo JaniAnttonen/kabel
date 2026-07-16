@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"log"
+	"math"
 	"strings"
+	"time"
 
 	"github.com/gen2brain/go-mpv"
 	"github.com/go-gl/glfw/v3.3/glfw"
@@ -15,6 +17,9 @@ const (
 	osdResY    = 720
 	panelWidth = 500
 	maxRows    = 20 // rows fit between header+status and footer at 28px each
+
+	listOverlayID   int64 = 1
+	volumeOverlayID int64 = 2
 )
 
 type UI struct {
@@ -40,7 +45,8 @@ type UI struct {
 	fullscreen             bool
 	winX, winY, winW, winH int
 
-	scrollAccum float64 // fractional scroll-wheel ticks not yet applied
+	scrollAccum float64     // fractional scroll-wheel ticks not yet applied
+	volTimer    *time.Timer // hides the volume indicator overlay
 }
 
 func newUI(m *mpv.Mpv, win *glfw.Window, channels []Channel, loadErr error) *UI {
@@ -313,7 +319,7 @@ func (ui *UI) handleKey(key glfw.Key, mods glfw.ModifierKey) {
 		ui.step(1)
 	case glfw.KeyM:
 		ui.command("cycle", "mute")
-		ui.osdMsg("Mute: ${mute}")
+		ui.showVolume()
 	case glfw.KeySpace:
 		ui.command("cycle", "pause")
 	case glfw.KeyF:
@@ -325,7 +331,102 @@ func (ui *UI) handleKey(key glfw.Key, mods glfw.ModifierKey) {
 
 func (ui *UI) addVolume(delta float64) {
 	ui.command("add", "volume", fmt.Sprintf("%.1f", delta))
-	ui.osdMsg("Volume ${volume}%")
+	ui.showVolume()
+}
+
+// showVolume draws a circular volume indicator (progress ring with the
+// percentage centered) in the lower-right corner and fades it after 1.5s.
+func (ui *UI) showVolume() {
+	vol, err := ui.m.GetProperty("volume", mpv.FormatDouble)
+	if err != nil {
+		return
+	}
+	v := vol.(float64)
+	muted := false
+	if mu, err := ui.m.GetProperty("mute", mpv.FormatFlag); err == nil {
+		muted, _ = mu.(bool)
+	}
+	ui.setOverlayID(volumeOverlayID, "ass-events", volumeASS(v, muted))
+	if ui.volTimer != nil {
+		ui.volTimer.Stop()
+	}
+	// The callback runs off the main thread but only issues mpv commands,
+	// which are thread-safe; it must not touch other UI state.
+	ui.volTimer = time.AfterFunc(1500*time.Millisecond, func() {
+		ui.setOverlayID(volumeOverlayID, "none", "")
+	})
+}
+
+// volumeASS renders the indicator: backdrop disc, faint full ring, progress
+// arc from 12 o'clock, and the percentage (or mute mark) in the middle.
+func volumeASS(v float64, muted bool) string {
+	const cx, cy = float64(osdResX - 100), float64(osdResY - 100)
+	const rOut, rIn = 46.0, 37.0
+	var b strings.Builder
+	fmt.Fprintf(&b, "{\\an7\\pos(0,0)\\bord0\\shad0\\1c&H101010&\\1a&H38&\\p1}%s{\\p0}\n",
+		circlePath(cx, cy, 58))
+	fmt.Fprintf(&b, "{\\an7\\pos(0,0)\\bord0\\shad0\\1c&H666666&\\1a&H90&\\p1}%s{\\p0}\n",
+		ringPath(cx, cy, rOut, rIn, 0, 360))
+	color := "&H00D7FF&"
+	label := fmt.Sprintf("%.0f%%", v)
+	if muted {
+		color = "&H5555AA&"
+		label = "✕"
+	}
+	if v > 0 {
+		fmt.Fprintf(&b, "{\\an7\\pos(0,0)\\bord0\\shad0\\1c%s\\p1}%s{\\p0}\n",
+			color, ringPath(cx, cy, rOut, rIn, -90, -90+3.6*v))
+	}
+	fmt.Fprintf(&b, "{\\an5\\pos(%.0f,%.0f)\\bord0\\shad0\\fs24\\b1\\1c&HFFFFFF&}%s\n",
+		cx, cy, label)
+	return b.String()
+}
+
+// arcSegs approximates a circular arc from a0 to a1 (degrees) with cubic
+// béziers, one per quarter turn, as ASS drawing segments continuing from
+// the arc's start point.
+func arcSegs(cx, cy, r, a0deg, a1deg float64) string {
+	a0 := a0deg * math.Pi / 180
+	a1 := a1deg * math.Pi / 180
+	n := int(math.Ceil(math.Abs(a1-a0) / (math.Pi / 2)))
+	if n < 1 {
+		n = 1
+	}
+	step := (a1 - a0) / float64(n)
+	var sb strings.Builder
+	for i := 0; i < n; i++ {
+		s := a0 + float64(i)*step
+		e := s + step
+		k := 4.0 / 3.0 * math.Tan((e-s)/4)
+		x0, y0 := cx+r*math.Cos(s), cy+r*math.Sin(s)
+		x3, y3 := cx+r*math.Cos(e), cy+r*math.Sin(e)
+		fmt.Fprintf(&sb, "b %.1f %.1f %.1f %.1f %.1f %.1f ",
+			x0-k*r*math.Sin(s), y0+k*r*math.Cos(s),
+			x3+k*r*math.Sin(e), y3-k*r*math.Cos(e),
+			x3, y3)
+	}
+	return sb.String()
+}
+
+func circlePath(cx, cy, r float64) string {
+	return fmt.Sprintf("m %.1f %.1f %s", cx+r, cy, arcSegs(cx, cy, r, 0, 360))
+}
+
+// ringPath draws an annulus (full circle) or annular sector between the
+// outer and inner radii; the inner arc runs backwards so the fill winds
+// correctly and leaves the hole.
+func ringPath(cx, cy, rOut, rIn, a0, a1 float64) string {
+	if a1-a0 >= 360 {
+		return fmt.Sprintf("m %.1f %.1f %sm %.1f %.1f %s",
+			cx+rOut, cy, arcSegs(cx, cy, rOut, 0, 360),
+			cx+rIn, cy, arcSegs(cx, cy, rIn, 360, 0))
+	}
+	rad0, rad1 := a0*math.Pi/180, a1*math.Pi/180
+	return fmt.Sprintf("m %.1f %.1f %sl %.1f %.1f %s",
+		cx+rOut*math.Cos(rad0), cy+rOut*math.Sin(rad0),
+		arcSegs(cx, cy, rOut, a0, a1),
+		cx+rIn*math.Cos(rad1), cy+rIn*math.Sin(rad1),
+		arcSegs(cx, cy, rIn, a1, a0))
 }
 
 // handleScroll navigates the channel list while it is open and controls the
@@ -429,9 +530,13 @@ func lineY(line int) int {
 }
 
 func (ui *UI) setOverlay(format, data string) {
+	ui.setOverlayID(listOverlayID, format, data)
+}
+
+func (ui *UI) setOverlayID(id int64, format, data string) {
 	_, err := ui.m.CommandNode(map[string]any{
 		"name":   "osd-overlay",
-		"id":     int64(1),
+		"id":     id,
 		"format": format,
 		"data":   data,
 		"res_x":  int64(osdResX),
