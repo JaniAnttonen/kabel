@@ -86,6 +86,22 @@ func TestZoneTabCountry(t *testing.T) {
 	}
 }
 
+func TestPrivateHost(t *testing.T) {
+	cases := map[string]bool{
+		"fritz.box":            true,
+		"192.168.178.1":        true,
+		"10.0.0.5":             true,
+		"iptv-org.github.io":   false,
+		"212.42.244.122":       false,
+		"myrouter.example.com": false,
+	}
+	for host, want := range cases {
+		if got := privateHost(host); got != want {
+			t.Errorf("privateHost(%q) = %v, want %v", host, got, want)
+		}
+	}
+}
+
 func TestSSDPLocationHost(t *testing.T) {
 	resp := "HTTP/1.1 200 OK\r\nEXT:\r\nLOCATION: http://192.168.178.1:49000/satipdesc.xml\r\nST: urn:ses-com:device:SatIPServer:1\r\n\r\n"
 	if got := ssdpLocationHost(resp); got != "192.168.178.1" {

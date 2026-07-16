@@ -2,9 +2,12 @@ package main
 
 import (
 	"bufio"
+	"crypto/tls"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -148,8 +151,29 @@ func cacheM3U(data []byte) {
 	}
 }
 
+// m3uClient returns an HTTP client for fetching a playlist. For private
+// LAN hosts (and .box names) it tolerates self-signed certificates, since
+// Fritz!Boxes redirect HTTP to HTTPS with one; public hosts stay strict.
+func m3uClient(rawurl string, timeout time.Duration) *http.Client {
+	client := &http.Client{Timeout: timeout}
+	if u, err := neturl.Parse(rawurl); err == nil && privateHost(u.Hostname()) {
+		client.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+	}
+	return client
+}
+
+func privateHost(host string) bool {
+	if strings.HasSuffix(host, ".box") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast())
+}
+
 func fetchM3U(url string) ([]byte, error) {
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := m3uClient(url, 5*time.Second)
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil, err

@@ -41,7 +41,7 @@ func discoverFritz() ([]Channel, bool) {
 
 func probeCandidates(urls []string) ([]Channel, bool) {
 	for _, u := range urls {
-		data, err := quickFetch(u, 2*time.Second)
+		data, err := quickFetch(u, 3*time.Second) // room for a redirect + TLS handshake
 		if err != nil {
 			log.Printf("discovery probe %s: %v", u, err)
 			continue
@@ -65,7 +65,7 @@ func probeCandidates(urls []string) ([]Channel, bool) {
 }
 
 func quickFetch(u string, timeout time.Duration) ([]byte, error) {
-	client := &http.Client{Timeout: timeout}
+	client := m3uClient(u, timeout)
 	resp, err := client.Get(u)
 	if err != nil {
 		return nil, err
