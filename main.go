@@ -140,9 +140,10 @@ func main() {
 		ui.play(0)
 	}
 
-	// Re-fetch the channel list on network changes (e.g. moving between
-	// tethering and the Fritz!Box network) or while it never loaded.
-	updates := watchChannels(*urlFlag, loadErr == nil, glfw.PostEmptyEvent)
+	// Keep sources fresh across network changes; Fritz!Box discovery only
+	// applies alongside the default public list (an explicit -url wins).
+	discover := *urlFlag == defaultM3UURL
+	updates := watchSources(*urlFlag, loadErr == nil, discover, glfw.PostEmptyEvent)
 
 	// Debug hook: KABEL_DEBUG_SHOT=/path.png captures window+OSD after 4s.
 	shotPath := os.Getenv("KABEL_DEBUG_SHOT")
@@ -170,8 +171,13 @@ func main() {
 		animating = ui.tick()
 
 		select {
-		case channels := <-updates:
-			ui.setChannels(channels)
+		case u := <-updates:
+			if u.public != nil {
+				ui.setPublic(u.public)
+			}
+			if u.localSet {
+				ui.setLocal(u.local)
+			}
 		default:
 		}
 

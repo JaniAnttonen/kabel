@@ -8,6 +8,15 @@ import (
 	"time"
 )
 
+// sourceUpdate carries refreshed channel lists; a nil public slice means
+// "unchanged", and localSet distinguishes "no update" from "local source
+// went away".
+type sourceUpdate struct {
+	public   []Channel
+	local    []Channel
+	localSet bool
+}
+
 // networkSignature fingerprints the host's current IP configuration so we
 // can notice Wi-Fi/tethering switches without any macOS-specific APIs.
 func networkSignature() string {
@@ -23,47 +32,68 @@ func networkSignature() string {
 	return strings.Join(ips, ",")
 }
 
-// watchChannels re-fetches the playlist whenever the network configuration
-// changes (e.g. switching from tethering back to the Fritz!Box Wi-Fi), and
-// retries every 15s while no channel list has been fetched successfully yet.
-// Fresh lists are delivered on the returned channel; wake rouses the GLFW
-// event loop after each send.
-func watchChannels(url string, fetched bool, wake func()) <-chan []Channel {
-	out := make(chan []Channel, 1)
+// watchSources keeps both channel sources fresh: it discovers a Fritz!Box
+// on startup and after every network change (dropping the local section
+// when none is found anymore), re-fetches the public playlist on network
+// changes, and retries every 15s while it has never loaded. discover=false
+// disables the Fritz!Box side (explicit -url). Updates are delivered on the
+// returned channel; wake rouses the GLFW event loop after each send.
+func watchSources(publicURL string, havePublic, discover bool, wake func()) <-chan sourceUpdate {
+	out := make(chan sourceUpdate, 8)
+	send := func(u sourceUpdate) {
+		select {
+		case out <- u:
+			wake()
+		default: // main loop is far behind; drop rather than block
+		}
+	}
+	fetchPublic := func() bool {
+		data, err := fetchM3U(publicURL)
+		if err != nil {
+			log.Printf("public channel list: %v", err)
+			return false
+		}
+		channels, err := parseM3U(strings.NewReader(string(data)))
+		if err != nil {
+			log.Printf("public channel list: %v", err)
+			return false
+		}
+		cacheM3U(data)
+		send(sourceUpdate{public: channels})
+		return true
+	}
+	runDiscovery := func() {
+		if !discover {
+			return
+		}
+		if local, ok := discoverFritz(); ok {
+			send(sourceUpdate{local: local, localSet: true})
+		} else {
+			send(sourceUpdate{localSet: true}) // none here; drop stale section
+		}
+	}
+
 	go func() {
+		runDiscovery()
 		sig := networkSignature()
 		lastTry := time.Now()
 		for range time.Tick(3 * time.Second) {
 			newSig := networkSignature()
 			changed := newSig != sig
 			sig = newSig
-			if !changed && (fetched || time.Since(lastTry) < 15*time.Second) {
-				continue
-			}
 			if changed {
-				log.Printf("network change detected, re-fetching channel list")
+				log.Printf("network change detected, refreshing channel sources")
 				time.Sleep(2 * time.Second) // let DHCP/routes settle
 			}
-			lastTry = time.Now()
-			data, err := fetchM3U(url)
-			if err != nil {
-				log.Printf("channel list retry: %v", err)
-				continue
+			if changed || (!havePublic && time.Since(lastTry) > 15*time.Second) {
+				lastTry = time.Now()
+				if fetchPublic() {
+					havePublic = true
+				}
 			}
-			channels, err := parseM3U(strings.NewReader(string(data)))
-			if err != nil {
-				log.Printf("channel list retry: %v", err)
-				continue
+			if changed {
+				runDiscovery()
 			}
-			cacheM3U(data)
-			fetched = true
-			// Overwrite any undelivered previous update.
-			select {
-			case <-out:
-			default:
-			}
-			out <- channels
-			wake()
 		}
 	}()
 	return out

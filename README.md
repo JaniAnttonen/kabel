@@ -35,13 +35,22 @@ to reach devices like a Fritz!Box.
 ## Usage
 
 By default the channel list is fetched from iptv-org's public catalog
-(`https://iptv-org.github.io/iptv/index.m3u`, ~13k free channels). For live
-DVB-C TV from a Fritz!Box, point it at the box instead, e.g.
-`-url http://192.168.178.1/dvb/m3u/tv.m3u`. Override with the `-url` flag or
-the `KABEL_M3U` environment variable. The last successfully fetched list is
-cached in `~/Library/Application Support/kabel/` so the app also starts when
-the source is unreachable. On network changes (e.g. switching from tethering
-back to home Wi-Fi) the list is re-fetched automatically.
+(`https://iptv-org.github.io/iptv/index.m3u`, ~13k free channels), grouped
+by category with channels from your country floated to the top of each
+group (country is inferred from the system time zone/locale — no location
+permissions).
+
+A Fritz!Box on the LAN is discovered automatically — via the `fritz.box`
+DNS name, the default gateway, then an SSDP search for SAT>IP servers — and
+its DVB-C channels are pinned on top of the list as a "Local" section. On
+network changes both sources refresh, so carrying the app to another
+Fritz!Box network just works.
+
+To use a single specific playlist instead (disables discovery and merging),
+pass `-url http://192.168.178.1/dvb/m3u/tv.m3u` or set the `KABEL_M3U`
+environment variable. The last successfully fetched public list is cached in
+`~/Library/Application Support/kabel/` so the app also starts when the
+source is unreachable.
 
 `-autoplay` starts the first channel immediately.
 

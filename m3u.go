@@ -7,14 +7,18 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
 
-// Channel is one entry from the Fritz!Box m3u playlist.
+// Channel is one entry from an m3u playlist.
 type Channel struct {
-	Name string
-	URL  string
+	Name     string
+	URL      string
+	Category string // group-title attribute (first segment), if any
+	Country  string // ISO 3166 alpha-2 from the tvg-id suffix, if any
+	Local    bool   // served from the local network (discovered Fritz!Box)
 }
 
 // parseM3U parses an extended m3u playlist. Fritz!Box lists look like:
@@ -27,7 +31,7 @@ type Channel struct {
 // the display name is everything after the last comma outside quotes.
 func parseM3U(r io.Reader) ([]Channel, error) {
 	var channels []Channel
-	var pendingName string
+	var pending Channel
 
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -37,16 +41,24 @@ func parseM3U(r io.Reader) ([]Channel, error) {
 		case line == "" || line == "#EXTM3U" || strings.HasPrefix(line, "#EXTM3U "):
 			continue
 		case strings.HasPrefix(line, "#EXTINF:"):
-			pendingName = extinfName(line)
+			pending = Channel{Name: extinfName(line)}
+			attrs := extinfAttrs(line)
+			if g := attrs["group-title"]; g != "" {
+				// iptv-org uses a single category; be tolerant of lists
+				// that pack several separated by semicolons.
+				pending.Category = strings.TrimSpace(strings.SplitN(g, ";", 2)[0])
+			}
+			pending.Country = tvgIDCountry(attrs["tvg-id"])
 		case strings.HasPrefix(line, "#"):
 			continue // other directives
 		default:
-			name := pendingName
-			if name == "" {
-				name = line
+			c := pending
+			c.URL = line
+			if c.Name == "" {
+				c.Name = line
 			}
-			channels = append(channels, Channel{Name: name, URL: line})
-			pendingName = ""
+			channels = append(channels, c)
+			pending = Channel{}
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -76,6 +88,28 @@ func extinfName(line string) string {
 	}
 	return ""
 }
+
+// extinfAttrs extracts key="value" attributes from an #EXTINF line.
+func extinfAttrs(line string) map[string]string {
+	attrs := map[string]string{}
+	for _, m := range extinfAttrRe.FindAllStringSubmatch(line, -1) {
+		attrs[m[1]] = m[2]
+	}
+	return attrs
+}
+
+var extinfAttrRe = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9-]*)="([^"]*)"`)
+
+// tvgIDCountry pulls the country code out of iptv-org style tvg-ids like
+// "YleTV1.fi" or "SomeChannel.us@East".
+func tvgIDCountry(id string) string {
+	if m := tvgCountryRe.FindStringSubmatch(id); m != nil {
+		return strings.ToUpper(m[1])
+	}
+	return ""
+}
+
+var tvgCountryRe = regexp.MustCompile(`\.([a-z]{2})(?:@|$)`)
 
 func cacheDir() (string, error) {
 	home, err := os.UserHomeDir()

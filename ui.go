@@ -30,13 +30,18 @@ type UI struct {
 	m   *mpv.Mpv
 	win *glfw.Window
 
-	channels []Channel
-	loadErr  error
+	localChans  []Channel // discovered Fritz!Box channels, pinned on top
+	publicChans []Channel
+	channels    []Channel  // merged display order (arrangeChannels)
+	items       []listItem // grouped rows incl. section headers
+	home        string     // user country for relevance ordering
+	loadErr     error
 
 	filter   []rune
-	filtered []int // indexes into channels matching filter
-	sel      int   // selection within filtered
-	scroll   int   // first visible row within filtered
+	view     []listItem // rows currently shown: items, or flat search hits
+	matchBuf []listItem
+	sel      int // selection within view (always a channel row)
+	scroll   int // first visible row within view
 
 	visible   bool
 	current   int // index into channels currently playing, -1 = none
@@ -94,35 +99,60 @@ func (a *anim) done(now time.Time) bool {
 	return a == nil || now.Sub(a.start) >= a.dur
 }
 
-func newUI(m *mpv.Mpv, win *glfw.Window, channels []Channel, loadErr error) *UI {
-	ui := &UI{m: m, win: win, channels: channels, loadErr: loadErr, current: -1}
-	ui.applyFilter()
+func newUI(m *mpv.Mpv, win *glfw.Window, public []Channel, loadErr error) *UI {
+	ui := &UI{m: m, win: win, publicChans: public, loadErr: loadErr, current: -1, home: homeCountry()}
+	log.Printf("home country for channel ordering: %q", ui.home)
+	ui.rebuild()
 	return ui
 }
 
-// setChannels swaps in a freshly fetched channel list (network watcher).
-// The currently playing channel keeps playing; its index is re-resolved by
-// URL so the ● marker stays correct.
-func (ui *UI) setChannels(channels []Channel) {
+// rebuild recomputes the merged channel order and display rows after a
+// source changed. The currently playing channel keeps playing; its index is
+// re-resolved by URL so the ● marker stays correct.
+func (ui *UI) rebuild() {
 	var currentURL string
 	if ui.current >= 0 && ui.current < len(ui.channels) {
 		currentURL = ui.channels[ui.current].URL
 	}
-	ui.channels = channels
-	ui.loadErr = nil
+	ui.channels, ui.items = arrangeChannels(ui.localChans, ui.publicChans, ui.home)
 	ui.current = -1
-	for i, c := range channels {
+	for i, c := range ui.channels {
 		if currentURL != "" && c.URL == currentURL {
 			ui.current = i
 			break
 		}
 	}
 	ui.applyFilter()
-	log.Printf("channel list updated: %d channels", len(channels))
+}
+
+// setPublic swaps in a freshly fetched public channel list.
+func (ui *UI) setPublic(channels []Channel) {
+	ui.publicChans = channels
+	ui.loadErr = nil
+	ui.refresh(fmt.Sprintf("Channel list updated (%d channels)", len(ui.localChans)+len(channels)))
+}
+
+// setLocal swaps in (or clears) the discovered Fritz!Box channels.
+func (ui *UI) setLocal(channels []Channel) {
+	had := len(ui.localChans) > 0
+	ui.localChans = channels
+	msg := ""
+	switch {
+	case len(channels) > 0:
+		msg = fmt.Sprintf("Fritz!Box found — %d local channels", len(channels))
+	case had:
+		msg = "Fritz!Box no longer reachable"
+	}
+	ui.refresh(msg)
+}
+
+func (ui *UI) refresh(msg string) {
+	ui.rebuild()
+	log.Printf("channel list: %d local + %d public", len(ui.localChans), len(ui.publicChans))
 	if ui.visible {
 		ui.render()
-	} else {
-		ui.osdMsg(fmt.Sprintf("Channel list updated (%d channels)", len(channels)))
+	} else if msg != "" {
+		ui.osdMsg(msg)
 	}
 }
 
@@ -188,20 +218,52 @@ func (ui *UI) tick() bool {
 
 func (ui *UI) applyFilter() {
 	needle := strings.ToLower(string(ui.filter))
-	ui.filtered = ui.filtered[:0]
-	for i, c := range ui.channels {
-		if needle == "" || strings.Contains(strings.ToLower(c.Name), needle) {
-			ui.filtered = append(ui.filtered, i)
+	if needle == "" {
+		ui.view = ui.items
+	} else {
+		// Flat result rows while searching; headers only in browse mode.
+		ui.matchBuf = ui.matchBuf[:0]
+		for i, c := range ui.channels {
+			if strings.Contains(strings.ToLower(c.Name), needle) {
+				ui.matchBuf = append(ui.matchBuf, listItem{chanIdx: i})
+			}
 		}
+		ui.view = ui.matchBuf
 	}
-	if ui.sel >= len(ui.filtered) {
-		ui.sel = len(ui.filtered) - 1
+	if ui.sel >= len(ui.view) {
+		ui.sel = len(ui.view) - 1
 	}
 	if ui.sel < 0 {
 		ui.sel = 0
 	}
+	ui.sel = ui.snapSelectable(ui.sel, 1)
 	ui.clampScroll()
 	ui.pillY = nil // layout changed; don't glide across a reshuffle
+}
+
+// snapSelectable returns the nearest channel row to i, searching in dir
+// first and backwards as fallback (headers are not selectable).
+func (ui *UI) snapSelectable(i, dir int) int {
+	if len(ui.view) == 0 {
+		return 0
+	}
+	if i < 0 {
+		i = 0
+	}
+	if i >= len(ui.view) {
+		i = len(ui.view) - 1
+	}
+	for j := i; j >= 0 && j < len(ui.view); j += dir {
+		if ui.view[j].header == "" {
+			return j
+		}
+	}
+	for j := i - dir; j >= 0 && j < len(ui.view); j -= dir {
+		if ui.view[j].header == "" {
+			return j
+		}
+	}
+	return i
 }
 
 func (ui *UI) clampScroll() {
@@ -211,13 +273,24 @@ func (ui *UI) clampScroll() {
 	if ui.sel >= ui.scroll+maxRows {
 		ui.scroll = ui.sel - maxRows + 1
 	}
+	// Reveal a section header sitting directly above the selection.
+	if ui.sel == ui.scroll && ui.sel > 0 && ui.sel-1 < len(ui.view) && ui.view[ui.sel-1].header != "" {
+		ui.scroll = ui.sel - 1
+	}
+	maxScroll := len(ui.view) - maxRows
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if ui.scroll > maxScroll {
+		ui.scroll = maxScroll
+	}
 	if ui.scroll < 0 {
 		ui.scroll = 0
 	}
 }
 
 func (ui *UI) moveSel(delta int) {
-	if len(ui.filtered) == 0 {
+	if len(ui.view) == 0 {
 		return
 	}
 	oldY := ui.pillTargetY()
@@ -225,13 +298,11 @@ func (ui *UI) moveSel(delta int) {
 		oldY = ui.pillY.at(time.Now())
 	}
 	oldScroll := ui.scroll
-	ui.sel += delta
-	if ui.sel < 0 {
-		ui.sel = 0
+	dir := 1
+	if delta < 0 {
+		dir = -1
 	}
-	if ui.sel >= len(ui.filtered) {
-		ui.sel = len(ui.filtered) - 1
-	}
+	ui.sel = ui.snapSelectable(ui.sel+delta, dir)
 	ui.clampScroll()
 	if ui.scroll == oldScroll {
 		// Same viewport: glide the pill; on scroll jumps it snaps.
@@ -403,8 +474,8 @@ func (ui *UI) handleKey(key glfw.Key, mods glfw.ModifierKey) {
 		case glfw.KeyPageDown:
 			ui.moveSel(maxRows)
 		case glfw.KeyEnter, glfw.KeyKPEnter:
-			if len(ui.filtered) > 0 {
-				ui.play(ui.filtered[ui.sel])
+			if ui.sel < len(ui.view) && ui.view[ui.sel].header == "" {
+				ui.play(ui.view[ui.sel].chanIdx)
 			}
 		case glfw.KeyBackspace:
 			if len(ui.filter) > 0 {
@@ -648,7 +719,7 @@ func (ui *UI) render() {
 	header := fmt.Sprintf("%d channels — type to search", len(ui.channels))
 	headerColor := "&HFFFFFF&"
 	if len(ui.filter) > 0 {
-		header = fmt.Sprintf("Search: %s_  (%d/%d)", escapeASS(string(ui.filter)), len(ui.filtered), len(ui.channels))
+		header = fmt.Sprintf("Search: %s_  (%d/%d)", escapeASS(string(ui.filter)), len(ui.view), len(ui.channels))
 	}
 	if ui.loadErr != nil {
 		header = "Channel list unavailable — check URL / network"
@@ -668,7 +739,7 @@ func (ui *UI) render() {
 	line++ // spacer
 
 	// Selection pill: glides between rows while pillY animates.
-	if len(ui.filtered) > 0 {
+	if ui.sel < len(ui.view) && ui.view[ui.sel].header == "" {
 		pillTop := ui.pillTargetY()
 		if ui.pillY != nil {
 			pillTop = ui.pillY.at(now)
@@ -678,13 +749,18 @@ func (ui *UI) render() {
 	}
 
 	end := ui.scroll + maxRows
-	if end > len(ui.filtered) {
-		end = len(ui.filtered)
+	if end > len(ui.view) {
+		end = len(ui.view)
 	}
 	for row := ui.scroll; row < end; row++ {
-		idx := ui.filtered[row]
-		name := escapeASS(ui.channels[idx].Name)
-		if idx == ui.current {
+		it := ui.view[row]
+		if it.header != "" {
+			fmt.Fprintf(&b, "{\\an7\\pos(%.1f,%d)\\bord0\\shad0\\fs18\\b1\\1c&H999999&%s}%s\n", 20+off, lineY(line)+4, alphaTag(0, vis), escapeASS(it.header))
+			line++
+			continue
+		}
+		name := escapeASS(ui.channels[it.chanIdx].Name)
+		if it.chanIdx == ui.current {
 			name += "  ●"
 		}
 		if row == ui.sel {

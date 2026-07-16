@@ -60,6 +60,29 @@ http://example.com/bare-url
 	if channels[2].URL != "http://example.com/bare-url" {
 		t.Errorf("channel 2 URL = %q", channels[2].URL)
 	}
+	// Attributes: category from group-title (first segment), country from
+	// the tvg-id suffix.
+	if channels[0].Category != "Vollprogramm, HD" && channels[0].Category != "Vollprogramm" {
+		t.Errorf("channel 0 category = %q", channels[0].Category)
+	}
+	if channels[0].Country != "DE" {
+		t.Errorf("channel 0 country = %q, want DE", channels[0].Country)
+	}
+}
+
+func TestParseIptvOrgStyle(t *testing.T) {
+	src := `#EXTM3U
+#EXTINF:-1 tvg-id="YleTV1.fi" tvg-logo="http://x/logo.png" group-title="General",Yle TV1 (1080p)
+https://example.com/yle.m3u8
+`
+	channels, err := parseM3U(strings.NewReader(src))
+	if err != nil {
+		t.Fatalf("parseM3U: %v", err)
+	}
+	c := channels[0]
+	if c.Category != "General" || c.Country != "FI" {
+		t.Errorf("got category %q country %q, want General/FI", c.Category, c.Country)
+	}
 }
 
 func TestParseEmptyPlaylist(t *testing.T) {
