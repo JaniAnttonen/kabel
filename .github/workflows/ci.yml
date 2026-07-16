@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    name: Test & staticcheck
+    runs-on: macos-latest
+    env:
+      PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install libmpv
+        run: brew install mpv
+
+      - name: Build
+        run: go build -tags pkgconfig ./...
+
+      - name: Test
+        run: go test -tags pkgconfig ./...
+
+      - name: staticcheck
+        run: go tool staticcheck -tags pkgconfig ./...

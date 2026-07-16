@@ -67,6 +67,18 @@ While watching (list hidden):
 | f | fullscreen |
 | q / Cmd+W | quit |
 
+## Development
+
+After cloning, activate the repo's git hooks once:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+The pre-push hook runs `staticcheck` (pinned via the `tool` directive in
+`go.mod`) and blocks the push on findings. CI (GitHub Actions) builds, runs
+the tests, and runs staticcheck on every PR and push to main.
+
 ## Debugging
 
 - `FRITZTV_MPV_LOG=/path/mpv.log` writes mpv's verbose log to a file.

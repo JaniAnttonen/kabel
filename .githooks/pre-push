@@ -1,0 +1,12 @@
+#!/bin/sh
+# Pre-push hook: refuse to push code that fails staticcheck.
+# Activated by: git config core.hooksPath .githooks
+set -e
+cd "$(git rev-parse --show-toplevel)"
+export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-/opt/homebrew/lib/pkgconfig}"
+
+echo "pre-push: staticcheck"
+go tool staticcheck -tags pkgconfig ./... || {
+    echo "pre-push: staticcheck failed — push aborted" >&2
+    exit 1
+}
