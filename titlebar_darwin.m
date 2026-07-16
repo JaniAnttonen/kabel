@@ -18,14 +18,49 @@ static void setTitlebarShown(NSWindow *w, BOOL shown) {
     }];
 }
 
+// passthroughClass returns a runtime subclass of base whose hitTest: always
+// returns nil, so the view is purely decorative and never intercepts mouse
+// events (window dragging in particular).
+static Class passthroughClass(Class base) {
+    NSString *name = [NSString stringWithFormat:@"KabelPassthrough_%s", class_getName(base)];
+    Class cls = NSClassFromString(name);
+    if (cls != nil) {
+        return cls;
+    }
+    cls = objc_allocateClassPair(base, name.UTF8String, 0);
+    IMP nilHitTest = imp_implementationWithBlock(^NSView *(id self, NSPoint p) { return nil; });
+    class_addMethod(cls, @selector(hitTest:), nilHitTest, "@@:{CGPoint=dd}");
+    objc_registerClassPair(cls);
+    return cls;
+}
+
+// makeViewDraggable makes cls report that a mouse-down may move the window,
+// added to that class only (no effect on superclasses).
+static void makeViewDraggable(Class cls) {
+    SEL sel = @selector(mouseDownCanMoveWindow);
+    IMP yes = imp_implementationWithBlock(^BOOL(id self) { return YES; });
+    Method base = class_getInstanceMethod(cls, sel);
+    if (!class_addMethod(cls, sel, yes, method_getTypeEncoding(base))) {
+        method_setImplementation(class_getInstanceMethod(cls, sel), yes);
+    }
+}
+
 // kabelStyleTitlebar makes the titlebar an overlay on the content (video
-// extends beneath it), backs it with the system's glass material, and hides
-// it whenever the window is not key. Idempotent; call again after leaving
-// fullscreen since GLFW rebuilds the style mask.
+// extends beneath it), backs it with the system's glass material, hides it
+// whenever the window is not key, and makes the window draggable from
+// anywhere. Idempotent; call again after leaving fullscreen since GLFW
+// rebuilds the style mask.
 void kabelStyleTitlebar(void *win) {
     NSWindow *w = (__bridge NSWindow *)win;
     w.styleMask |= NSWindowStyleMaskFullSizeContentView;
     w.titlebarAppearsTransparent = YES;
+
+    // Drag-anywhere: the GLFW content view handles mouse events, so it also
+    // has to opt in to background window dragging.
+    w.movableByWindowBackground = YES;
+    if (w.contentView != nil) {
+        makeViewDraggable([w.contentView class]);
+    }
 
     NSView *tb = titlebarView(w);
     if (tb != nil) {
@@ -40,9 +75,9 @@ void kabelStyleTitlebar(void *win) {
             NSView *glass = nil;
             Class glassCls = NSClassFromString(@"NSGlassEffectView");
             if (glassCls != nil) { // macOS 26+ Liquid Glass
-                glass = [[glassCls alloc] initWithFrame:tb.bounds];
+                glass = [[passthroughClass(glassCls) alloc] initWithFrame:tb.bounds];
             } else {
-                NSVisualEffectView *ev = [[NSVisualEffectView alloc] initWithFrame:tb.bounds];
+                NSVisualEffectView *ev = [[passthroughClass([NSVisualEffectView class]) alloc] initWithFrame:tb.bounds];
                 ev.material = NSVisualEffectMaterialTitlebar;
                 ev.blendingMode = NSVisualEffectBlendingModeWithinWindow;
                 ev.state = NSVisualEffectStateFollowsWindowActiveState;
