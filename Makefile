@@ -8,7 +8,8 @@ export PKG_CONFIG_PATH
 
 # Sign with a stable identity when available so TCC permissions (Local
 # Network!) survive rebuilds; ad-hoc otherwise.
-SIGN_ID := $(shell security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Developer ID Application/{print $$2; exit}')
+# (the hash, not the name — the same cert in two keychains makes names ambiguous)
+SIGN_ID := $(shell security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/{print $$2; exit}')
 ifeq ($(SIGN_ID),)
 SIGN_ID := -
 endif
