@@ -20,8 +20,13 @@ import (
 // for SAT>IP servers (the DVB-C streamer is one), which also covers mesh
 // setups where the TV-serving box is not the gateway.
 func discoverFritz() ([]Channel, bool) {
-	var candidates []string
-	candidates = append(candidates, "http://fritz.box/dvb/m3u/tv.m3u")
+	candidates := []string{
+		"http://fritz.box/dvb/m3u/tv.m3u",
+		// AVM's factory-default address: reachable even when the box sits
+		// behind another router (routed, not on-link) where neither the
+		// gateway probe nor SSDP multicast can see it.
+		"http://192.168.178.1/dvb/m3u/tv.m3u",
+	}
 	if gw := defaultGateway(); gw != "" {
 		candidates = append(candidates, fmt.Sprintf("http://%s/dvb/m3u/tv.m3u", gw))
 	}
@@ -39,29 +44,58 @@ func discoverFritz() ([]Channel, bool) {
 	return nil, false
 }
 
+// probeCandidates checks all URLs concurrently and returns the first that
+// serves a playlist. The box's DVB endpoint can take many seconds (it
+// interrogates the tuner), hence the generous per-probe timeout — parallel
+// probing keeps the wall time at one timeout, not their sum.
 func probeCandidates(urls []string) ([]Channel, bool) {
+	urls = dedupe(urls)
+	results := make(chan []Channel, len(urls))
 	for _, u := range urls {
-		data, err := quickFetch(u, 3*time.Second) // room for a redirect + TLS handshake
-		if err != nil {
-			log.Printf("discovery probe %s: %v", u, err)
-			continue
+		go func(u string) {
+			results <- probeOne(u)
+		}(u)
+	}
+	for range urls {
+		if chs := <-results; chs != nil {
+			return chs, true
 		}
-		if !bytes.HasPrefix(bytes.TrimSpace(data), []byte("#EXTM3U")) {
-			log.Printf("discovery probe %s: not an m3u playlist", u)
-			continue
-		}
-		channels, err := parseM3U(bytes.NewReader(data))
-		if err != nil {
-			log.Printf("discovery probe %s: %v", u, err)
-			continue
-		}
-		for i := range channels {
-			channels[i].Local = true
-		}
-		log.Printf("discovered Fritz!Box channel list at %s (%d channels)", u, len(channels))
-		return channels, true
 	}
 	return nil, false
+}
+
+func probeOne(u string) []Channel {
+	data, err := quickFetch(u, 12*time.Second)
+	if err != nil {
+		log.Printf("discovery probe %s: %v", u, err)
+		return nil
+	}
+	if !bytes.HasPrefix(bytes.TrimSpace(data), []byte("#EXTM3U")) {
+		log.Printf("discovery probe %s: not an m3u playlist", u)
+		return nil
+	}
+	channels, err := parseM3U(bytes.NewReader(data))
+	if err != nil {
+		log.Printf("discovery probe %s: %v", u, err)
+		return nil
+	}
+	for i := range channels {
+		channels[i].Local = true
+	}
+	log.Printf("discovered Fritz!Box channel list at %s (%d channels)", u, len(channels))
+	return channels
+}
+
+func dedupe(urls []string) []string {
+	seen := map[string]bool{}
+	out := urls[:0]
+	for _, u := range urls {
+		if !seen[u] {
+			seen[u] = true
+			out = append(out, u)
+		}
+	}
+	return out
 }
 
 func quickFetch(u string, timeout time.Duration) ([]byte, error) {
