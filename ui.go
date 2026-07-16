@@ -33,6 +33,10 @@ type UI struct {
 	current int // index into channels currently playing, -1 = none
 	status  string
 
+	rtspTCP    bool   // use RTSP-over-TCP (set after a failed UDP attempt)
+	retried    bool   // current play attempt is already the TCP retry
+	lastMpvErr string // most recent error-level mpv log line
+
 	fullscreen             bool
 	winX, winY, winW, winH int
 }
@@ -124,10 +128,25 @@ func (ui *UI) moveSel(delta int) {
 }
 
 func (ui *UI) play(idx int) {
+	ui.playAttempt(idx, false)
+}
+
+func (ui *UI) playAttempt(idx int, isRetry bool) {
 	if idx < 0 || idx >= len(ui.channels) {
 		return
 	}
 	c := ui.channels[idx]
+	if strings.HasPrefix(c.URL, "rtsp") {
+		transport := "udp"
+		if ui.rtspTCP {
+			transport = "tcp"
+		}
+		if err := ui.m.SetOptionString("rtsp-transport", transport); err != nil {
+			log.Printf("rtsp-transport=%s: %v", transport, err)
+		}
+	}
+	ui.lastMpvErr = ""
+	ui.retried = isRetry
 	if err := ui.m.Command([]string{"loadfile", c.URL}); err != nil {
 		ui.status = "Failed to start: " + c.Name
 		log.Printf("loadfile %s: %v", c.URL, err)
@@ -135,7 +154,11 @@ func (ui *UI) play(idx int) {
 		return
 	}
 	ui.current = idx
-	ui.status = "Tuning " + c.Name + "…"
+	if isRetry {
+		ui.status = "Retrying " + c.Name + " via TCP…"
+	} else {
+		ui.status = "Tuning " + c.Name + "…"
+	}
 	ui.win.SetTitle(c.Name + " — Fritz!Box TV")
 	ui.hideList()
 }
@@ -163,21 +186,61 @@ func (ui *UI) playbackStarted() {
 	}
 }
 
-func (ui *UI) playbackEnded() {
-	// mpv went idle: either the idle source was replaced (fine) or a stream
-	// died. If a channel was playing, surface that and bring the list back.
-	if ui.current >= 0 {
-		idleActive, err := ui.m.GetProperty("idle-active", mpv.FormatFlag)
-		if err == nil && idleActive == false {
-			return // just a track switch, not idle
-		}
-		ui.status = "Playback ended: " + ui.channels[ui.current].Name
-		ui.current = -1
-		ui.win.SetTitle("Fritz!Box TV")
-		if err := ui.m.Command([]string{"loadfile", idleSource}); err != nil {
-			log.Printf("idle source: %v", err)
-		}
-		ui.showList()
+func (ui *UI) playbackEnded(ef mpv.EventEndFile) {
+	if ui.current < 0 {
+		return
+	}
+	// "stop" fires when loadfile replaces the running stream (channel zap,
+	// idle source swap) and "quit" on shutdown — neither is a failure.
+	if ef.Reason == mpv.EndFileStop || ef.Reason == mpv.EndFileQuit {
+		return
+	}
+	c := ui.channels[ui.current]
+	log.Printf("playback ended: %s reason=%s err=%v mpv=%q", c.Name, ef.Reason, ef.Error, ui.lastMpvErr)
+
+	// Fritz!Box streams are RTSP with RTP over UDP by default; if UDP data
+	// never arrives (firewall, packet loss) or the tuner was momentarily
+	// busy, one retry over TCP usually rescues it.
+	if !ui.retried && strings.HasPrefix(c.URL, "rtsp") {
+		ui.rtspTCP = true
+		ui.playAttempt(ui.current, true)
+		return
+	}
+
+	msg := "Playback failed: " + c.Name
+	if ef.Reason == mpv.EndFileEOF {
+		msg = "Stream ended: " + c.Name
+	}
+	// The first captured log line names the root cause (e.g. "connection
+	// refused"); the end-file error is often just "unrecognized file format".
+	if ui.lastMpvErr != "" {
+		msg += " — " + ui.lastMpvErr
+	} else if ef.Error != nil {
+		msg += " — " + ef.Error.Error()
+	}
+	ui.status = msg
+	ui.current = -1
+	ui.win.SetTitle("Fritz!Box TV")
+	if err := ui.m.Command([]string{"loadfile", idleSource}); err != nil {
+		log.Printf("idle source: %v", err)
+	}
+	ui.showList()
+}
+
+// noteMpvLog remembers the first error-level mpv log line of the current
+// play attempt (the root cause; later errors are usually generic fallout).
+func (ui *UI) noteMpvLog(lm mpv.EventLogMessage) {
+	if lm.Level != "error" && lm.Level != "fatal" {
+		return
+	}
+	// Renderer/output noise (hwdec probing etc.) isn't a stream failure.
+	p := lm.Prefix
+	if strings.Contains(p, "render") || strings.Contains(p, "videotoolbox") ||
+		strings.HasPrefix(p, "vo") || strings.HasPrefix(p, "ao") {
+		return
+	}
+	if ui.lastMpvErr == "" {
+		ui.lastMpvErr = strings.TrimSpace(p + ": " + lm.Text)
 	}
 }
 

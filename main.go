@@ -43,6 +43,12 @@ func main() {
 	defer glfw.Terminate()
 
 	glfw.WindowHint(glfw.CocoaRetinaFramebuffer, glfw.True)
+	// mpv's GL renderer needs >= 3.0 for hwdec (VideoToolbox) interop;
+	// macOS only offers 3.2+ as core profile.
+	glfw.WindowHint(glfw.ContextVersionMajor, 3)
+	glfw.WindowHint(glfw.ContextVersionMinor, 2)
+	glfw.WindowHint(glfw.OpenGLProfile, glfw.OpenGLCoreProfile)
+	glfw.WindowHint(glfw.OpenGLForwardCompatible, glfw.True)
 	win, err := glfw.CreateWindow(1280, 720, "Fritz!Box TV", nil, nil)
 	if err != nil {
 		log.Fatalf("create window: %v", err)
@@ -61,6 +67,10 @@ func main() {
 		"input-default-bindings": "no",
 		"osc":                    "no",
 		"audio-display":          "no",
+		// copy-back hwdec: hardware decode with the plain GL upload path,
+		// so screenshots and filters keep working.
+		"hwdec":                  "auto-copy-safe",
+		"screenshot-sw":          "yes", // window screenshots despite core-profile GL
 		"network-timeout":        "10",
 		"cache":                  "yes",
 		"demuxer-readahead-secs": "2",
@@ -79,6 +89,12 @@ func main() {
 	}
 	log.Printf("mpv initialized")
 	defer m.TerminateDestroy()
+
+	// Surface mpv warnings/errors on stderr and keep the last error for the
+	// UI, so stream failures are diagnosable without a verbose log file.
+	if err := m.RequestLogMessages("warn"); err != nil {
+		log.Printf("mpv log messages: %v", err)
+	}
 
 	rc, err := m.NewRenderContextGL(func(name string) unsafe.Pointer {
 		return glfw.GetProcAddress(name)
@@ -126,8 +142,13 @@ func main() {
 
 	for !win.ShouldClose() {
 		if shotPath != "" && time.Now().After(shotAt) {
+			// window mode includes the OSD but can fail with direct hwdec
+			// surfaces; fall back to the bare decoded frame.
 			if err := m.Command([]string{"screenshot-to-file", shotPath, "window"}); err != nil {
-				log.Printf("debug screenshot: %v", err)
+				log.Printf("debug screenshot (window): %v", err)
+				if err := m.Command([]string{"screenshot-to-file", shotPath, "video"}); err != nil {
+					log.Printf("debug screenshot (video): %v", err)
+				}
 			}
 			shotPath = ""
 		}
@@ -147,8 +168,12 @@ func main() {
 			switch ev.EventID {
 			case mpv.EventShutdown:
 				win.SetShouldClose(true)
+			case mpv.EventLogMsg:
+				lm := ev.LogMessage()
+				log.Printf("mpv %s [%s] %s", lm.Prefix, lm.Level, lm.Text)
+				ui.noteMpvLog(lm)
 			case mpv.EventEnd:
-				ui.playbackEnded()
+				ui.playbackEnded(ev.EndFile())
 			case mpv.EventFileLoaded:
 				if path, err := m.GetProperty("path", mpv.FormatString); err == nil {
 					log.Printf("mpv: loaded %v", path)
