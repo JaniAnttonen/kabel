@@ -132,7 +132,9 @@ func (p *Prebuffer) ensure(channelURL string) *satipSession {
 	delete(p.sessions, channelURL)
 	p.mu.Unlock()
 
-	s, err := dialSatIP(channelURL) // outside the lock; involves network IO
+	// Sessions are keyed by the raw channel URL but stream the pid-expanded
+	// variant so subtitle/audio tracks are included.
+	s, err := dialSatIP(cachedExpandedURL(channelURL)) // outside the lock; network IO
 	if err != nil {
 		log.Printf("prebuffer %s: %v", channelURL, err)
 		return nil

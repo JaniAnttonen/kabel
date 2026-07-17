@@ -123,6 +123,18 @@ func (ui *UI) rebuild() {
 		}
 	}
 	ui.applyFilter()
+
+	// Warm the pid-expansion cache for local channels so subtitle/audio
+	// tracks are complete by the time they're tuned.
+	var rtspURLs []string
+	for _, c := range ui.channels {
+		if strings.HasPrefix(c.URL, "rtsp") {
+			rtspURLs = append(rtspURLs, c.URL)
+		}
+	}
+	if len(rtspURLs) > 0 {
+		prefetchPIDExpansions(rtspURLs)
+	}
 }
 
 // setPublic swaps in a freshly fetched public channel list.
@@ -346,6 +358,9 @@ func (ui *UI) playAttempt(idx int, isRetry bool) {
 			"buffer_size=8388608,probesize=600000,analyzeduration=700000"); err != nil {
 			log.Printf("rtsp buffer option: %v", err)
 		}
+		// Use the pid-expanded URL (all subtitle/audio streams) once the
+		// background PMT probe has resolved it.
+		target = cachedExpandedURL(c.URL)
 		// Play through the prebuffer proxy: a warm neighbor session starts
 		// from its buffer instantly. Retries bypass it to isolate faults.
 		if ui.zap != nil && !isRetry {
