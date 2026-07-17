@@ -546,6 +546,12 @@ func (ui *UI) handleKey(key glfw.Key, mods glfw.ModifierKey) {
 	case glfw.KeyM:
 		ui.command("cycle", "mute")
 		ui.showVolume()
+	case glfw.KeyS:
+		ui.command("cycle", "sub")
+		ui.showTrackOSD("sub", "Subtitles")
+	case glfw.KeyA:
+		ui.command("cycle", "audio")
+		ui.showTrackOSD("audio", "Audio")
 	case glfw.KeySpace:
 		ui.command("cycle", "pause")
 	case glfw.KeyF:
@@ -707,6 +713,23 @@ func (ui *UI) command(args ...string) {
 	if err := ui.m.Command(args); err != nil {
 		log.Printf("command %v: %v", args, err)
 	}
+}
+
+// showTrackOSD reports the selected track after cycling (property expansion
+// does not work through the client API, so read and format it ourselves).
+func (ui *UI) showTrackOSD(kind, label string) {
+	lang, err := ui.m.GetProperty("current-tracks/"+kind+"/lang", mpv.FormatString)
+	if err != nil {
+		ui.osdMsg(label + ": off")
+		return
+	}
+	desc := fmt.Sprintf("%v", lang)
+	if title, err := ui.m.GetProperty("current-tracks/"+kind+"/title", mpv.FormatString); err == nil {
+		desc += fmt.Sprintf(" — %v", title)
+	} else if codec, err := ui.m.GetProperty("current-tracks/"+kind+"/codec", mpv.FormatString); err == nil {
+		desc += fmt.Sprintf(" (%v)", codec)
+	}
+	ui.osdMsg(label + ": " + desc)
 }
 
 func (ui *UI) osdMsg(msg string) {
