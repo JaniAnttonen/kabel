@@ -58,6 +58,11 @@ type UI struct {
 
 	scrollAccum float64 // fractional scroll-wheel ticks not yet applied
 
+	hovering     bool      // cursor is inside the window
+	barUntil     time.Time // show the info bar until (channel-change grace)
+	barShown     bool
+	barRefreshed time.Time
+
 	panelPos *anim // panel slide: 0 = onscreen, -1 = offscreen
 	pillY    *anim // selection pill glide between rows
 
@@ -132,15 +137,83 @@ func (ui *UI) rebuild() {
 	ui.applyFilter()
 
 	// Warm the pid-expansion cache for local channels so subtitle/audio
-	// tracks are complete by the time they're tuned.
+	// tracks are complete by the time they're tuned, and keep the EPG
+	// sweeper pointed at one representative URL per mux.
 	var rtspURLs []string
+	muxSeen := map[string]bool{}
+	var muxURLs []string
 	for _, c := range ui.channels {
-		if strings.HasPrefix(c.URL, "rtsp") {
-			rtspURLs = append(rtspURLs, c.URL)
+		if !strings.HasPrefix(c.URL, "rtsp") {
+			continue
+		}
+		rtspURLs = append(rtspURLs, c.URL)
+		if freq := urlParam(c.URL, "freq"); freq != "" && !muxSeen[freq] {
+			muxSeen[freq] = true
+			muxURLs = append(muxURLs, c.URL)
 		}
 	}
 	if len(rtspURLs) > 0 {
 		prefetchPIDExpansions(rtspURLs)
+	}
+	if len(muxURLs) > 0 {
+		startEPGSweeper(muxURLs)
+	}
+}
+
+// setHover tracks whether the cursor is inside the window (info bar shows
+// while hovering).
+func (ui *UI) setHover(inside bool) {
+	ui.hovering = inside
+}
+
+// updateInfoBar composes the bottom bar text for the playing channel from
+// the EPG store: "Channel — Programme  18:45–19:30" plus description/next.
+func (ui *UI) updateInfoBar() {
+	if ui.current < 0 || ui.current >= len(ui.channels) {
+		infoBarText(ui.win, "", "")
+		return
+	}
+	c := ui.channels[ui.current]
+	line1, line2 := c.Name, ""
+	if now, next := epgNowNext(urlParam(c.URL, "freq"), serviceOf(c.URL)); now != nil || next != nil {
+		hm := func(t time.Time) string { return t.Local().Format("15:04") }
+		if now != nil {
+			line1 = fmt.Sprintf("%s — %s   %s–%s", c.Name, now.Title, hm(now.Start), hm(now.Start.Add(now.Dur)))
+			line2 = now.Text
+		}
+		if next != nil {
+			suffix := fmt.Sprintf("Next: %s (%s)", next.Title, hm(next.Start))
+			if line2 != "" {
+				line2 = truncate(line2, 110) + "   ·   " + suffix
+			} else {
+				line2 = suffix
+			}
+		}
+	}
+	infoBarText(ui.win, line1, line2)
+	ui.barRefreshed = time.Now()
+}
+
+func serviceOf(channelURL string) int {
+	if svc, ok := channelService(channelURL); ok {
+		return svc
+	}
+	return -1
+}
+
+// tickInfoBar drives bar visibility: shown while hovering or shortly after
+// a channel change, hidden with the list open or when nothing plays.
+func (ui *UI) tickInfoBar(now time.Time) {
+	show := ui.current >= 0 && !ui.visible && (ui.hovering || now.Before(ui.barUntil))
+	if show && now.Sub(ui.barRefreshed) > 10*time.Second {
+		ui.updateInfoBar() // EPG may have arrived, or the programme changed
+	}
+	if show != ui.barShown {
+		ui.barShown = show
+		if show {
+			ui.updateInfoBar()
+		}
+		infoBarShow(ui.win, show)
 	}
 }
 
@@ -205,6 +278,7 @@ func (ui *UI) hideList() {
 func (ui *UI) tick() bool {
 	now := time.Now()
 	active := false
+	ui.tickInfoBar(now)
 
 	if ui.panelPos != nil || ui.pillY != nil {
 		if ui.panelPos.done(now) {
@@ -399,6 +473,8 @@ func (ui *UI) playAttempt(idx int, isRetry bool) {
 	if ui.zap != nil && strings.HasPrefix(c.URL, "rtsp") {
 		ui.zap.SetActive(c.URL, ui.neighborRTSPURLs(idx))
 	}
+	ui.barUntil = time.Now().Add(5 * time.Second)
+	ui.updateInfoBar()
 	ui.hideList()
 }
 

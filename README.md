@@ -54,6 +54,11 @@ source is unreachable.
 
 `-autoplay` starts the first channel immediately.
 
+While watching a local channel, a Liquid Glass bar at the bottom shows the
+current programme (title, times, description) and what's next, from the
+DVB EPG broadcast on the mux. It appears for a few seconds on channel
+changes and whenever the cursor is over the window.
+
 ### Keys
 
 With the channel list open:

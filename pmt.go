@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -151,6 +154,77 @@ func mergePIDsIntoURL(channelURL string, extra []int) string {
 }
 
 var pidExpandCache sync.Map // channel URL -> expanded URL
+var progNumCache sync.Map   // channel URL -> DVB service id (program number)
+
+// The expansion results are stable per channel, so they're persisted —
+// warm starts skip ~20 probe sessions and free the tuner budget for the
+// EPG sweep right away.
+
+type pidCacheEntry struct {
+	Expanded string `json:"expanded"`
+	Service  int    `json:"service"`
+}
+
+func pidCachePath() (string, error) {
+	dir, err := cacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "pids.json"), nil
+}
+
+func loadPIDCache() {
+	path, err := pidCachePath()
+	if err != nil {
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	entries := map[string]pidCacheEntry{}
+	if json.Unmarshal(data, &entries) != nil {
+		return
+	}
+	for u, e := range entries {
+		pidExpandCache.Store(u, e.Expanded)
+		if e.Service > 0 {
+			progNumCache.Store(u, e.Service)
+		}
+	}
+	log.Printf("pid cache: %d channels loaded", len(entries))
+}
+
+func savePIDCache() {
+	path, err := pidCachePath()
+	if err != nil {
+		return
+	}
+	entries := map[string]pidCacheEntry{}
+	pidExpandCache.Range(func(k, v any) bool {
+		e := pidCacheEntry{Expanded: v.(string)}
+		if s, ok := progNumCache.Load(k); ok {
+			e.Service = s.(int)
+		}
+		entries[k.(string)] = e
+		return true
+	})
+	data, err := json.MarshalIndent(entries, "", " ")
+	if err != nil {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	_ = os.WriteFile(path, data, 0o644)
+}
+
+// channelService returns the channel's DVB service id once the PMT probe
+// has resolved it.
+func channelService(channelURL string) (int, bool) {
+	if v, ok := progNumCache.Load(channelURL); ok {
+		return v.(int), true
+	}
+	return 0, false
+}
 
 // expandChannelPIDs returns the channel URL with its pids parameter
 // extended to all elementary streams found in the PMT. Results are cached;
@@ -170,6 +244,7 @@ func expandChannelPIDs(channelURL string) string {
 	}
 	expanded := mergePIDsIntoURL(channelURL, pids)
 	pidExpandCache.Store(channelURL, expanded)
+	savePIDCache()
 	if expanded != channelURL {
 		log.Printf("expanded pids for %s -> %s", channelURL, expanded[strings.Index(expanded, "pids="):])
 	}
@@ -243,6 +318,8 @@ func probeProgramPIDs(channelURL string, timeout time.Duration) ([]int, error) {
 			case pid == pmtPID:
 				if sec := pmtAsm.feed(pkt); sec != nil {
 					if pids := parsePMTPIDs(sec); len(pids) > 0 {
+						// Program number doubles as the EIT service id.
+						progNumCache.Store(channelURL, int(sec[3])<<8|int(sec[4]))
 						return pids, nil
 					}
 				}

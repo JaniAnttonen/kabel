@@ -29,6 +29,7 @@ func init() {
 
 func main() {
 	log.SetFlags(log.Ltime)
+	loadPIDCache()
 	urlFlag := flag.String("url", envOr("KABEL_M3U", defaultM3UURL), "URL of the m3u channel list")
 	autoplay := flag.Bool("autoplay", false, "start playing the first channel immediately")
 	flag.Parse()
@@ -148,6 +149,9 @@ func main() {
 	})
 	win.SetScrollCallback(func(_ *glfw.Window, _, yoff float64) {
 		ui.handleScroll(yoff)
+	})
+	win.SetCursorEnterCallback(func(_ *glfw.Window, entered bool) {
+		ui.setHover(entered)
 	})
 
 	if err := m.Command([]string{"loadfile", idleSource}); err != nil {

@@ -35,6 +35,7 @@ type satipSession struct {
 	punchRTP  *net.UDPAddr
 	punchRTCP *net.UDPAddr
 	bytes     atomic.Int64 // TS bytes received (throughput diagnostics)
+	psiOnly   bool         // low-rate tables-only session; skip starvation checks
 	stop      chan struct{}
 	once      sync.Once
 }
@@ -44,6 +45,12 @@ type satipSession struct {
 // client_port it was told, which the router may not map back to us), so
 // each attempt must prove data flow and gets fresh ports otherwise.
 func dialSatIP(channelURL string) (*satipSession, error) {
+	return dialSatIPBytes(channelURL, 64*1024)
+}
+
+// dialSatIPBytes verifies at least minBytes flow within the probe window —
+// PSI-only sessions (EPG sweeps) trickle far slower than full TV streams.
+func dialSatIPBytes(channelURL string, minBytes int64) (*satipSession, error) {
 	var err error
 	for attempt := 0; attempt < 3; attempt++ {
 		var s *satipSession
@@ -52,10 +59,10 @@ func dialSatIP(channelURL string) (*satipSession, error) {
 			continue
 		}
 		deadline := time.Now().Add(1500 * time.Millisecond)
-		for time.Now().Before(deadline) && s.bytes.Load() < 64*1024 {
+		for time.Now().Before(deadline) && s.bytes.Load() < minBytes {
 			time.Sleep(50 * time.Millisecond)
 		}
-		if s.bytes.Load() >= 64*1024 {
+		if s.bytes.Load() >= minBytes {
 			return s, nil
 		}
 		s.Close()
@@ -245,6 +252,9 @@ func (s *satipSession) keepaliveLoop() {
 			cur := s.bytes.Load()
 			delta := cur - lastBytes
 			lastBytes = cur
+			if s.psiOnly {
+				continue // PSI sessions legitimately trickle
+			}
 			if delta < 200*1024 {
 				// Starving (healthy TV muxes deliver megabytes per tick):
 				// close so the next ensure/zap redials with fresh ports.
