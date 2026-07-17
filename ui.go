@@ -48,8 +48,7 @@ type UI struct {
 	status    string
 	statusErr bool // status describes a failure (rendered in red)
 
-	rtspTCP    bool   // use RTSP-over-TCP (set after a failed UDP attempt)
-	retried    bool   // current play attempt is already the TCP retry
+	retried    bool   // current play attempt is already a retry
 	lastMpvErr string // most recent error-level mpv log line
 
 	fullscreen             bool
@@ -332,13 +331,18 @@ func (ui *UI) playAttempt(idx int, isRetry bool) {
 	}
 	c := ui.channels[idx]
 	if strings.HasPrefix(c.URL, "rtsp") {
-		transport := "udp"
-		if ui.rtspTCP {
-			transport = "tcp"
+		// Pin RTP over UDP: the Fritz!Box rejects TCP interleaving (461)
+		// and ffmpeg's auto-negotiation trips over its RTSP quirks. SAT>IP
+		// HD bursts overflow the OS default UDP receive buffer — showing
+		// as RTP loss and heavy macroblocking — hence the big buffer.
+		if err := ui.m.SetOptionString("rtsp-transport", "udp"); err != nil {
+			log.Printf("rtsp-transport: %v", err)
 		}
-		if err := ui.m.SetOptionString("rtsp-transport", transport); err != nil {
-			log.Printf("rtsp-transport=%s: %v", transport, err)
+		if err := ui.m.SetOptionString("demuxer-lavf-o", "buffer_size=8388608"); err != nil {
+			log.Printf("rtsp buffer option: %v", err)
 		}
+	} else {
+		_ = ui.m.SetOptionString("demuxer-lavf-o", "")
 	}
 	ui.lastMpvErr = ""
 	ui.retried = isRetry
@@ -352,7 +356,7 @@ func (ui *UI) playAttempt(idx int, isRetry bool) {
 	ui.current = idx
 	ui.statusErr = false
 	if isRetry {
-		ui.status = "Retrying " + c.Name + " via TCP…"
+		ui.status = "Retrying " + c.Name + "…"
 	} else {
 		ui.status = "Tuning " + c.Name + "…"
 	}
@@ -396,11 +400,9 @@ func (ui *UI) playbackEnded(ef mpv.EventEndFile) {
 	c := ui.channels[ui.current]
 	log.Printf("playback ended: %s reason=%s err=%v mpv=%q", c.Name, ef.Reason, ef.Error, ui.lastMpvErr)
 
-	// Fritz!Box streams are RTSP with RTP over UDP by default; if UDP data
-	// never arrives (firewall, packet loss) or the tuner was momentarily
-	// busy, one retry over TCP usually rescues it.
+	// A momentarily busy tuner or a dropped RTSP setup is transient; give
+	// local streams one automatic retry before surfacing the failure.
 	if !ui.retried && strings.HasPrefix(c.URL, "rtsp") {
-		ui.rtspTCP = true
 		ui.playAttempt(ui.current, true)
 		return
 	}

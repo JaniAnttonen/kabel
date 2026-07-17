@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"strconv"
 	"time"
 	"unsafe"
 
@@ -145,9 +146,14 @@ func main() {
 	discover := *urlFlag == defaultM3UURL
 	updates := watchSources(*urlFlag, loadErr == nil, discover, glfw.PostEmptyEvent)
 
-	// Debug hook: KABEL_DEBUG_SHOT=/path.png captures window+OSD after 4s.
+	// Debug hook: KABEL_DEBUG_SHOT=/path.png captures window+OSD after 4s
+	// (or KABEL_DEBUG_SHOT_DELAY seconds — slow tuners need more).
 	shotPath := os.Getenv("KABEL_DEBUG_SHOT")
-	shotAt := time.Now().Add(4 * time.Second)
+	shotDelay := 4 * time.Second
+	if v, err := strconv.Atoi(os.Getenv("KABEL_DEBUG_SHOT_DELAY")); err == nil && v > 0 {
+		shotDelay = time.Duration(v) * time.Second
+	}
+	shotAt := time.Now().Add(shotDelay)
 	animating := false
 
 	for !win.ShouldClose() {
