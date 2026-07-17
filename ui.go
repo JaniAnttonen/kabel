@@ -51,6 +51,7 @@ type UI struct {
 
 	retried    bool   // current play attempt is already a retry
 	lastMpvErr string // most recent error-level mpv log line
+	subPref    string // subtitle languages ("fin,swe"), "off", or ""
 
 	fullscreen             bool
 	winX, winY, winW, winH int
@@ -102,6 +103,12 @@ func (a *anim) done(now time.Time) bool {
 func newUI(m *mpv.Mpv, win *glfw.Window, public []Channel, loadErr error) *UI {
 	ui := &UI{m: m, win: win, publicChans: public, loadErr: loadErr, current: -1, home: homeCountry()}
 	log.Printf("home country for channel ordering: %q", ui.home)
+	if pref, ok := loadSubPref(); ok {
+		ui.subPref = pref
+	} else {
+		ui.subPref = defaultSubPref(ui.home)
+	}
+	log.Printf("subtitle preference: %q", ui.subPref)
 	ui.rebuild()
 	return ui
 }
@@ -432,8 +439,104 @@ func (ui *UI) playbackStarted() {
 	if ui.current >= 0 {
 		ui.status = ""
 		ui.statusErr = false
+		ui.applySubPref()
 		ui.render()
 	}
+}
+
+// subTrack is a selectable subtitle track (teletext excluded: the bundled
+// ffmpeg cannot decode it, so offering it would look broken).
+type subTrack struct {
+	id   int64
+	lang string
+	hi   bool // hearing-impaired variant
+}
+
+func (ui *UI) subTracks() []subTrack {
+	nv, err := ui.m.GetProperty("track-list/count", mpv.FormatInt64)
+	if err != nil {
+		return nil
+	}
+	n, _ := nv.(int64)
+	var tracks []subTrack
+	for i := int64(0); i < n; i++ {
+		pfx := fmt.Sprintf("track-list/%d/", i)
+		if t, err := ui.m.GetProperty(pfx+"type", mpv.FormatString); err != nil || t != "sub" {
+			continue
+		}
+		if c, err := ui.m.GetProperty(pfx+"codec", mpv.FormatString); err == nil && c == "dvb_teletext" {
+			continue
+		}
+		idv, err := ui.m.GetProperty(pfx+"id", mpv.FormatInt64)
+		if err != nil {
+			continue
+		}
+		tr := subTrack{id: idv.(int64)}
+		if l, err := ui.m.GetProperty(pfx+"lang", mpv.FormatString); err == nil {
+			tr.lang = fmt.Sprintf("%v", l)
+		}
+		if h, err := ui.m.GetProperty(pfx+"hearing-impaired", mpv.FormatFlag); err == nil {
+			tr.hi, _ = h.(bool)
+		}
+		tracks = append(tracks, tr)
+	}
+	return tracks
+}
+
+// applySubPref selects a subtitle track per the stored preference: first
+// preferred language wins, plain tracks before hearing-impaired ones.
+func (ui *UI) applySubPref() {
+	if ui.subPref == "" || ui.subPref == "off" {
+		ui.command("set", "sid", "no")
+		return
+	}
+	tracks := ui.subTracks()
+	for _, lang := range strings.Split(ui.subPref, ",") {
+		for _, wantHI := range []bool{false, true} {
+			for _, tr := range tracks {
+				if tr.lang == lang && tr.hi == wantHI {
+					ui.command("set", "sid", fmt.Sprintf("%d", tr.id))
+					log.Printf("subtitles: selected %s (sid %d)", lang, tr.id)
+					return
+				}
+			}
+		}
+	}
+	ui.command("set", "sid", "no")
+}
+
+// cycleSub steps off -> track1 -> track2 -> ... -> off, skipping teletext,
+// and persists the choice (language or off) across channels and sessions.
+func (ui *UI) cycleSub() {
+	tracks := ui.subTracks()
+	cur := int64(-1)
+	if v, err := ui.m.GetProperty("current-tracks/sub/id", mpv.FormatInt64); err == nil {
+		cur, _ = v.(int64)
+	}
+	next := 0 // index into tracks; len(tracks) = off
+	if cur >= 0 {
+		next = len(tracks) // unknown current -> off
+		for i, tr := range tracks {
+			if tr.id == cur {
+				next = i + 1
+				break
+			}
+		}
+	}
+	if next >= len(tracks) {
+		ui.command("set", "sid", "no")
+		ui.subPref = "off"
+	} else {
+		tr := tracks[next]
+		ui.command("set", "sid", fmt.Sprintf("%d", tr.id))
+		if tr.lang != "" {
+			ui.subPref = tr.lang
+		} else {
+			ui.subPref = "off"
+		}
+	}
+	saveSubPref(ui.subPref)
+	ui.showTrackOSD("sub", "Subtitles")
 }
 
 func (ui *UI) playbackEnded(ef mpv.EventEndFile) {
@@ -562,8 +665,7 @@ func (ui *UI) handleKey(key glfw.Key, mods glfw.ModifierKey) {
 		ui.command("cycle", "mute")
 		ui.showVolume()
 	case glfw.KeyS:
-		ui.command("cycle", "sub")
-		ui.showTrackOSD("sub", "Subtitles")
+		ui.cycleSub()
 	case glfw.KeyA:
 		ui.command("cycle", "audio")
 		ui.showTrackOSD("audio", "Audio")

@@ -74,7 +74,7 @@ While watching (list hidden):
 | ↑ ↓ / scroll | volume |
 | ← → | channel up/down |
 | m | mute |
-| s | cycle subtitle tracks (DVB subs/teletext) |
+| s | cycle subtitle tracks (auto-selected by region; manual choice remembered) |
 | a | cycle audio tracks |
 | Space | pause |
 | f | fullscreen |
