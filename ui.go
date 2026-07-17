@@ -191,7 +191,49 @@ func (ui *UI) updateInfoBar() {
 		}
 	}
 	infoBarText(ui.win, line1, line2)
+	infoBarStatus(ui.win, ui.composeStatus())
 	ui.barRefreshed = time.Now()
+}
+
+// composeStatus builds the bottom bar's right-aligned line: volume (or
+// mute), current audio track, current subtitle track.
+func (ui *UI) composeStatus() string {
+	var parts []string
+	muted := false
+	if mu, err := ui.m.GetProperty("mute", mpv.FormatFlag); err == nil {
+		muted, _ = mu.(bool)
+	}
+	if muted {
+		parts = append(parts, "Muted")
+	} else if v, err := ui.m.GetProperty("volume", mpv.FormatDouble); err == nil {
+		parts = append(parts, fmt.Sprintf("Vol %.0f%%", v.(float64)))
+	}
+	if lang := ui.trackLang("audio"); lang != "" {
+		parts = append(parts, "Audio "+lang)
+	}
+	if lang := ui.trackLang("sub"); lang != "" {
+		parts = append(parts, "Subs "+lang)
+	} else {
+		parts = append(parts, "Subs off")
+	}
+	return strings.Join(parts, "   ·   ")
+}
+
+// trackLang returns the language of the current audio/sub track ("" if none).
+func (ui *UI) trackLang(kind string) string {
+	v, err := ui.m.GetProperty("current-tracks/"+kind+"/lang", mpv.FormatString)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%v", v)
+}
+
+// refreshStatus updates just the status line if the bar is currently shown
+// (called on volume/track changes).
+func (ui *UI) refreshStatus() {
+	if ui.barShown {
+		infoBarStatus(ui.win, ui.composeStatus())
+	}
 }
 
 func serviceOf(channelURL string) int {
@@ -747,11 +789,14 @@ func (ui *UI) handleKey(key glfw.Key, mods glfw.ModifierKey) {
 	case glfw.KeyM:
 		ui.command("cycle", "mute")
 		ui.showVolume()
+		ui.refreshStatus()
 	case glfw.KeyS:
 		ui.cycleSub()
+		ui.refreshStatus()
 	case glfw.KeyA:
 		ui.command("cycle", "audio")
 		ui.showTrackOSD("audio", "Audio")
+		ui.refreshStatus()
 	case glfw.KeySpace:
 		ui.command("cycle", "pause")
 	case glfw.KeyF:
@@ -764,6 +809,7 @@ func (ui *UI) handleKey(key glfw.Key, mods glfw.ModifierKey) {
 func (ui *UI) addVolume(delta float64) {
 	ui.command("add", "volume", fmt.Sprintf("%.1f", delta))
 	ui.showVolume()
+	ui.refreshStatus()
 }
 
 // showVolume animates a circular volume indicator (progress ring with the

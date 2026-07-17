@@ -6,6 +6,7 @@ static char kObserversKey;
 static char kInfoBarKey;
 static char kInfoLine1Key;
 static char kInfoLine2Key;
+static char kInfoStatusKey;
 static char kTitleLabelKey;
 static char kLumaTopKey;
 static char kLumaBotKey;
@@ -122,10 +123,13 @@ void kabelSetupInfoBar(void *win) {
     bar.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     bar.alphaValue = 0;
 
+    const CGFloat statusW = 300;
+    const CGFloat leftW = r.size.width - 32 - statusW - 16;
+
     NSTextField *l1 = [NSTextField labelWithString:@""];
     l1.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
     l1.textColor = [NSColor labelColor];
-    l1.frame = NSMakeRect(16, H - 26, r.size.width - 32, 18);
+    l1.frame = NSMakeRect(16, H - 26, leftW, 18);
     l1.autoresizingMask = NSViewWidthSizable;
     l1.lineBreakMode = NSLineBreakByTruncatingTail;
     [bar addSubview:l1];
@@ -133,15 +137,26 @@ void kabelSetupInfoBar(void *win) {
     NSTextField *l2 = [NSTextField labelWithString:@""];
     l2.font = [NSFont systemFontOfSize:11];
     l2.textColor = [NSColor secondaryLabelColor];
-    l2.frame = NSMakeRect(16, 8, r.size.width - 32, 16);
+    l2.frame = NSMakeRect(16, 8, leftW, 16);
     l2.autoresizingMask = NSViewWidthSizable;
     l2.lineBreakMode = NSLineBreakByTruncatingTail;
     [bar addSubview:l2];
+
+    // Right-aligned status: volume, audio track, subtitle track. Anchored
+    // to the right edge (flexible left margin) so it stays put on resize.
+    NSTextField *st = [NSTextField labelWithString:@""];
+    st.font = [NSFont systemFontOfSize:12];
+    st.alignment = NSTextAlignmentRight;
+    st.frame = NSMakeRect(r.size.width - 16 - statusW, (H - 16) / 2, statusW, 16);
+    st.autoresizingMask = NSViewMinXMargin | NSViewMinYMargin | NSViewMaxYMargin;
+    st.lineBreakMode = NSLineBreakByTruncatingHead;
+    [bar addSubview:st];
 
     [frame addSubview:bar positioned:NSWindowAbove relativeTo:w.contentView];
     objc_setAssociatedObject(w, &kInfoBarKey, bar, OBJC_ASSOCIATION_RETAIN);
     objc_setAssociatedObject(w, &kInfoLine1Key, l1, OBJC_ASSOCIATION_RETAIN);
     objc_setAssociatedObject(w, &kInfoLine2Key, l2, OBJC_ASSOCIATION_RETAIN);
+    objc_setAssociatedObject(w, &kInfoStatusKey, st, OBJC_ASSOCIATION_RETAIN);
 }
 
 void kabelInfoBarText(void *win, const char *line1, const char *line2) {
@@ -156,6 +171,16 @@ void kabelInfoBarText(void *win, const char *line1, const char *line2) {
     if (l2 != nil) {
         l2.stringValue = [NSString stringWithUTF8String:line2 ?: ""];
         refreshLabel(l2, luma, YES);
+    }
+}
+
+// kabelInfoBarStatus sets the right-aligned volume/audio/subtitle line.
+void kabelInfoBarStatus(void *win, const char *text) {
+    NSWindow *w = (__bridge NSWindow *)win;
+    NSTextField *st = objc_getAssociatedObject(w, &kInfoStatusKey);
+    if (st != nil) {
+        st.stringValue = [NSString stringWithUTF8String:text ?: ""];
+        refreshLabel(st, lumaFor(w, &kLumaBotKey, 0.06), NO);
     }
 }
 
@@ -181,6 +206,7 @@ void kabelApplyLuma(void *win, double topLuma, double botLuma) {
         objc_setAssociatedObject(w, &kLumaBotKey, @(botLuma), OBJC_ASSOCIATION_RETAIN);
         refreshLabel(objc_getAssociatedObject(w, &kInfoLine1Key), botLuma, NO);
         refreshLabel(objc_getAssociatedObject(w, &kInfoLine2Key), botLuma, YES);
+        refreshLabel(objc_getAssociatedObject(w, &kInfoStatusKey), botLuma, NO);
     }
 }
 

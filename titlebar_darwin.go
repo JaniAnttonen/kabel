@@ -7,6 +7,7 @@ package main
 #include <stdlib.h>
 void kabelStyleTitlebar(void *win);
 void kabelInfoBarText(void *win, const char *line1, const char *line2);
+void kabelInfoBarStatus(void *win, const char *text);
 void kabelInfoBarShow(void *win, bool show);
 void kabelSetTitle(void *win, const char *text);
 void kabelApplyLuma(void *win, double topLuma, double botLuma);
@@ -32,6 +33,13 @@ func infoBarText(win *glfw.Window, line1, line2 string) {
 	defer C.free(unsafe.Pointer(c1))
 	defer C.free(unsafe.Pointer(c2))
 	C.kabelInfoBarText(win.GetCocoaWindow(), c1, c2)
+}
+
+// infoBarStatus sets the bottom bar's right-aligned status line (main thread).
+func infoBarStatus(win *glfw.Window, text string) {
+	c := C.CString(text)
+	defer C.free(unsafe.Pointer(c))
+	C.kabelInfoBarStatus(win.GetCocoaWindow(), c)
 }
 
 // infoBarShow fades the bottom EPG bar in or out (main thread only).
