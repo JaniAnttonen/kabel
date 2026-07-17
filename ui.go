@@ -196,18 +196,20 @@ func (ui *UI) composeStatus() string {
 	if mu, err := ui.m.GetProperty("mute", mpv.FormatFlag); err == nil {
 		muted, _ = mu.(bool)
 	}
+	// Each item is prefixed with the key that controls it, so the status
+	// line doubles as a legend for how to access the control.
 	if muted {
-		parts = append(parts, "Muted")
+		parts = append(parts, "m Muted")
 	} else if v, err := ui.m.GetProperty("volume", mpv.FormatDouble); err == nil {
-		parts = append(parts, fmt.Sprintf("Vol %.0f%%", v.(float64)))
+		parts = append(parts, fmt.Sprintf("↑↓ Vol %.0f%%", v.(float64)))
 	}
 	if lang := ui.trackLang("audio"); lang != "" {
-		parts = append(parts, "Audio "+lang)
+		parts = append(parts, "a Audio "+lang)
 	}
 	if lang := ui.trackLang("sub"); lang != "" {
-		parts = append(parts, "Subs "+lang)
+		parts = append(parts, "s Subs "+lang)
 	} else {
-		parts = append(parts, "Subs off")
+		parts = append(parts, "s Subs off")
 	}
 	return strings.Join(parts, "   ·   ")
 }

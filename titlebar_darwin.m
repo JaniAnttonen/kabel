@@ -123,7 +123,7 @@ void kabelSetupInfoBar(void *win) {
     bar.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     bar.alphaValue = 0;
 
-    const CGFloat statusW = 300;
+    const CGFloat statusW = 390;
     const CGFloat leftW = r.size.width - 32 - statusW - 16;
 
     NSTextField *l1 = [NSTextField labelWithString:@""];
@@ -149,7 +149,7 @@ void kabelSetupInfoBar(void *win) {
     st.alignment = NSTextAlignmentRight;
     st.frame = NSMakeRect(r.size.width - 16 - statusW, (H - 16) / 2, statusW, 16);
     st.autoresizingMask = NSViewMinXMargin | NSViewMinYMargin | NSViewMaxYMargin;
-    st.lineBreakMode = NSLineBreakByTruncatingHead;
+    st.lineBreakMode = NSLineBreakByTruncatingTail;
     [bar addSubview:st];
 
     [frame addSubview:bar positioned:NSWindowAbove relativeTo:w.contentView];
