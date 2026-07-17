@@ -29,6 +29,7 @@ const errorColor = "&H3A45FF&"
 type UI struct {
 	m   *mpv.Mpv
 	win *glfw.Window
+	zap *Prebuffer // adjacent-channel prebuffering; nil disables
 
 	localChans  []Channel // discovered Fritz!Box channels, pinned on top
 	publicChans []Channel
@@ -330,6 +331,7 @@ func (ui *UI) playAttempt(idx int, isRetry bool) {
 		return
 	}
 	c := ui.channels[idx]
+	target := c.URL
 	if strings.HasPrefix(c.URL, "rtsp") {
 		// Pin RTP over UDP: the Fritz!Box rejects TCP interleaving (461)
 		// and ffmpeg's auto-negotiation trips over its RTSP quirks. SAT>IP
@@ -344,12 +346,20 @@ func (ui *UI) playAttempt(idx int, isRetry bool) {
 			"buffer_size=8388608,probesize=600000,analyzeduration=700000"); err != nil {
 			log.Printf("rtsp buffer option: %v", err)
 		}
+		// Play through the prebuffer proxy: a warm neighbor session starts
+		// from its buffer instantly. Retries bypass it to isolate faults.
+		if ui.zap != nil && !isRetry {
+			target = ui.zap.StreamURL(c.URL)
+		}
 	} else {
 		_ = ui.m.SetOptionString("demuxer-lavf-o", "")
+		if ui.zap != nil {
+			ui.zap.SetActive("", nil) // free the box tuners
+		}
 	}
 	ui.lastMpvErr = ""
 	ui.retried = isRetry
-	if err := ui.m.Command([]string{"loadfile", c.URL}); err != nil {
+	if err := ui.m.Command([]string{"loadfile", target}); err != nil {
 		ui.status = "Failed to start: " + c.Name
 		ui.statusErr = true
 		log.Printf("loadfile %s: %v", c.URL, err)
@@ -364,7 +374,27 @@ func (ui *UI) playAttempt(idx int, isRetry bool) {
 		ui.status = "Tuning " + c.Name + "…"
 	}
 	ui.win.SetTitle(c.Name + " — kabel")
+	if ui.zap != nil && strings.HasPrefix(c.URL, "rtsp") {
+		ui.zap.SetActive(c.URL, ui.neighborRTSPURLs(idx))
+	}
 	ui.hideList()
+}
+
+// neighborRTSPURLs returns the zapper neighbors (±1 with wraparound, like
+// step) that are local RTSP channels and thus worth prebuffering.
+func (ui *UI) neighborRTSPURLs(idx int) []string {
+	n := len(ui.channels)
+	if n < 2 {
+		return nil
+	}
+	var urls []string
+	for _, d := range []int{-1, 1} {
+		u := ui.channels[(idx+d+n)%n].URL
+		if strings.HasPrefix(u, "rtsp") && u != ui.channels[idx].URL {
+			urls = append(urls, u)
+		}
+	}
+	return urls
 }
 
 // step switches to the previous/next channel relative to the current one

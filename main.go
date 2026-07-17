@@ -121,6 +121,18 @@ func main() {
 	rc.SetUpdateCallback(glfw.PostEmptyEvent)
 
 	ui := newUI(m, win, channels, loadErr)
+	// Experimental: adjacent-channel prebuffering for instant zapping.
+	// Off by default — concurrent SAT>IP UDP sessions through a NAT'd
+	// AP hop cap out below one HD stream's rate on some networks.
+	if os.Getenv("KABEL_PREBUFFER") == "1" {
+		if zap, err := newPrebuffer(); err == nil {
+			ui.zap = zap
+			defer zap.Close()
+			log.Printf("prebuffer enabled")
+		} else {
+			log.Printf("prebuffer unavailable: %v", err)
+		}
+	}
 
 	needsRender := true
 	win.SetFramebufferSizeCallback(func(_ *glfw.Window, _, _ int) {

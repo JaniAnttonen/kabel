@@ -90,6 +90,14 @@ The pre-push hook runs `staticcheck` (pinned via the `tool` directive in
 `go.mod`) and blocks the push on findings. CI (GitHub Actions) builds, runs
 the tests, and runs staticcheck on every PR and push to main.
 
+## Experimental
+
+- `KABEL_PREBUFFER=1` keeps SAT>IP sessions warm for the adjacent channels
+  and zaps from their buffers via a loopback proxy (instant channel
+  switching). Needs a network path that sustains several concurrent UDP
+  streams from the box; behind a NAT'd access-point hop the per-session
+  rate can collapse, so it's off by default.
+
 ## Debugging
 
 - `KABEL_MPV_LOG=/path/mpv.log` writes mpv's verbose log to a file.
