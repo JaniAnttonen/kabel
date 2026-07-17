@@ -210,6 +210,20 @@ func startEPGSweeper(muxURLs []string) {
 	})
 }
 
+// sweepMuxNow runs a prioritized EPG sweep of one mux in the background
+// (e.g. the mux just tuned), so its now/next is available within seconds
+// without waiting for the periodic full sweep.
+func sweepMuxNow(muxURL string) {
+	if muxURL == "" {
+		return
+	}
+	go func() {
+		expandSem <- struct{}{}
+		defer func() { <-expandSem }()
+		epgSweepMux(muxURL)
+	}()
+}
+
 // epgSweepMux opens a PSI-only session on the mux and collects EIT
 // present/following events for all its services.
 func epgSweepMux(muxURL string) {

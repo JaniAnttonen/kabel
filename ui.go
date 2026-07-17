@@ -205,8 +205,10 @@ func serviceOf(channelURL string) int {
 // a channel change, hidden with the list open or when nothing plays.
 func (ui *UI) tickInfoBar(now time.Time) {
 	show := ui.current >= 0 && !ui.visible && (ui.hovering || now.Before(ui.barUntil))
-	if show && now.Sub(ui.barRefreshed) > 10*time.Second {
-		ui.updateInfoBar() // EPG may have arrived, or the programme changed
+	// Refresh often while shown: EPG arrives asynchronously after a tune,
+	// and the running programme rolls over.
+	if show && now.Sub(ui.barRefreshed) > 3*time.Second {
+		ui.updateInfoBar()
 	}
 	if show != ui.barShown {
 		ui.barShown = show
@@ -470,10 +472,14 @@ func (ui *UI) playAttempt(idx int, isRetry bool) {
 		ui.status = "Tuning " + c.Name + "…"
 	}
 	ui.win.SetTitle(c.Name + " — kabel")
+	setWindowTitle(ui.win, c.Name)
 	if ui.zap != nil && strings.HasPrefix(c.URL, "rtsp") {
 		ui.zap.SetActive(c.URL, ui.neighborRTSPURLs(idx))
 	}
 	ui.barUntil = time.Now().Add(5 * time.Second)
+	if strings.HasPrefix(c.URL, "rtsp") {
+		sweepMuxNow(c.URL) // get this mux's EPG promptly
+	}
 	ui.updateInfoBar()
 	ui.hideList()
 }
@@ -649,6 +655,7 @@ func (ui *UI) playbackEnded(ef mpv.EventEndFile) {
 	ui.statusErr = true
 	ui.current = -1
 	ui.win.SetTitle("kabel")
+	setWindowTitle(ui.win, "")
 	if err := ui.m.Command([]string{"loadfile", idleSource}); err != nil {
 		log.Printf("idle source: %v", err)
 	}

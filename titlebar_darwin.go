@@ -8,6 +8,8 @@ package main
 void kabelStyleTitlebar(void *win);
 void kabelInfoBarText(void *win, const char *line1, const char *line2);
 void kabelInfoBarShow(void *win, bool show);
+void kabelSetTitle(void *win, const char *text);
+void kabelApplyLuma(void *win, double topLuma, double botLuma);
 */
 import "C"
 
@@ -35,4 +37,17 @@ func infoBarText(win *glfw.Window, line1, line2 string) {
 // infoBarShow fades the bottom EPG bar in or out (main thread only).
 func infoBarShow(win *glfw.Window, show bool) {
 	C.kabelInfoBarShow(win.GetCocoaWindow(), C.bool(show))
+}
+
+// setWindowTitle sets the adaptive titlebar label (main thread only).
+func setWindowTitle(win *glfw.Window, text string) {
+	c := C.CString(text)
+	defer C.free(unsafe.Pointer(c))
+	C.kabelSetTitle(win.GetCocoaWindow(), c)
+}
+
+// applyLuma updates backdrop luminance for the titlebar (top) and info bar
+// (bottom); pass a negative value to leave one unchanged (main thread only).
+func applyLuma(win *glfw.Window, top, bottom float64) {
+	C.kabelApplyLuma(win.GetCocoaWindow(), C.double(top), C.double(bottom))
 }

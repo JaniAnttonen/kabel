@@ -266,13 +266,16 @@ var expandSem = make(chan struct{}, 1)
 // short-lived session at a time.
 func prefetchPIDExpansions(urls []string) {
 	go func() {
-		expandSem <- struct{}{}
-		defer func() { <-expandSem }()
 		for _, u := range urls {
 			if _, ok := pidExpandCache.Load(u); ok {
 				continue
 			}
+			// Acquire per channel, not for the whole batch, so EPG sweeps
+			// (which share this tuner budget) can interleave instead of
+			// waiting out all ~20 probes.
+			expandSem <- struct{}{}
 			expandChannelPIDs(u)
+			<-expandSem
 		}
 	}()
 }

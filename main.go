@@ -176,6 +176,7 @@ func main() {
 	}
 	shotAt := time.Now().Add(shotDelay)
 	animating := false
+	var lastLuma time.Time
 
 	for !win.ShouldClose() {
 		if shotPath != "" && time.Now().After(shotAt) {
@@ -237,6 +238,17 @@ func main() {
 			w, h := win.GetFramebufferSize()
 			if err := rc.RenderGL(0, w, h, true); err != nil {
 				log.Printf("render: %v", err)
+			}
+			// Sample backdrop luminance behind the bars (from the freshly
+			// rendered back buffer) so their text recolours for contrast.
+			if w > 0 && h > 40 && time.Since(lastLuma) > 400*time.Millisecond {
+				lastLuma = time.Now()
+				bot := sampleLuma(0, 32, w, 8)
+				top := sampleLuma(0, h-40, w, 8)
+				if os.Getenv("KABEL_LUMA_DEBUG") != "" {
+					log.Printf("luma top=%.3f bot=%.3f (fb %dx%d)", top, bot, w, h)
+				}
+				applyLuma(win, top, bot)
 			}
 			win.SwapBuffers()
 			rc.ReportSwap()

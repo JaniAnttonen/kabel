@@ -6,6 +6,41 @@ static char kObserversKey;
 static char kInfoBarKey;
 static char kInfoLine1Key;
 static char kInfoLine2Key;
+static char kTitleLabelKey;
+static char kLumaTopKey;
+static char kLumaBotKey;
+
+static double lumaFor(NSWindow *w, char *key, double dflt) {
+    NSNumber *n = objc_getAssociatedObject(w, key);
+    return n ? n.doubleValue : dflt;
+}
+
+// refreshLabel re-renders a label's text with a luminance-adaptive colour
+// (light text on dark backdrops, dark on light) plus an opposite-colour
+// shadow so it stays legible even at mid grey. Text is read from the
+// label's current stringValue.
+static void refreshLabel(NSTextField *tf, double luma, BOOL secondary) {
+    if (tf == nil) {
+        return;
+    }
+    NSString *s = tf.stringValue ?: @"";
+    BOOL dark = luma < 0.55; // dark backdrop -> light text
+    CGFloat fg = dark ? 1.0 : 0.0;
+    CGFloat a = secondary ? 0.80 : 1.0;
+    NSShadow *sh = [[NSShadow alloc] init];
+    sh.shadowColor = [NSColor colorWithWhite:(dark ? 0.0 : 1.0) alpha:0.5];
+    sh.shadowBlurRadius = 3.0;
+    sh.shadowOffset = NSMakeSize(0, -0.5);
+    NSMutableParagraphStyle *ps = [[NSMutableParagraphStyle alloc] init];
+    ps.lineBreakMode = NSLineBreakByTruncatingTail;
+    NSDictionary *attrs = @{
+        NSForegroundColorAttributeName : [NSColor colorWithWhite:fg alpha:a],
+        NSShadowAttributeName : sh,
+        NSFontAttributeName : tf.font,
+        NSParagraphStyleAttributeName : ps,
+    };
+    tf.attributedStringValue = [[NSAttributedString alloc] initWithString:s attributes:attrs];
+}
 
 static NSView *titlebarView(NSWindow *w) {
     return [[w standardWindowButton:NSWindowCloseButton] superview];
@@ -113,11 +148,39 @@ void kabelInfoBarText(void *win, const char *line1, const char *line2) {
     NSWindow *w = (__bridge NSWindow *)win;
     NSTextField *l1 = objc_getAssociatedObject(w, &kInfoLine1Key);
     NSTextField *l2 = objc_getAssociatedObject(w, &kInfoLine2Key);
+    double luma = lumaFor(w, &kLumaBotKey, 0.06);
     if (l1 != nil) {
         l1.stringValue = [NSString stringWithUTF8String:line1 ?: ""];
+        refreshLabel(l1, luma, NO);
     }
     if (l2 != nil) {
         l2.stringValue = [NSString stringWithUTF8String:line2 ?: ""];
+        refreshLabel(l2, luma, YES);
+    }
+}
+
+// kabelSetTitle sets the custom (adaptive) titlebar title text.
+void kabelSetTitle(void *win, const char *text) {
+    NSWindow *w = (__bridge NSWindow *)win;
+    NSTextField *t = objc_getAssociatedObject(w, &kTitleLabelKey);
+    if (t != nil) {
+        t.stringValue = [NSString stringWithUTF8String:text ?: ""];
+        refreshLabel(t, lumaFor(w, &kLumaTopKey, 0.06), NO);
+    }
+}
+
+// kabelApplyLuma updates the sampled backdrop luminance for the titlebar
+// (top) and info bar (bottom) and recolours their text accordingly.
+void kabelApplyLuma(void *win, double topLuma, double botLuma) {
+    NSWindow *w = (__bridge NSWindow *)win;
+    if (topLuma >= 0) {
+        objc_setAssociatedObject(w, &kLumaTopKey, @(topLuma), OBJC_ASSOCIATION_RETAIN);
+        refreshLabel(objc_getAssociatedObject(w, &kTitleLabelKey), topLuma, NO);
+    }
+    if (botLuma >= 0) {
+        objc_setAssociatedObject(w, &kLumaBotKey, @(botLuma), OBJC_ASSOCIATION_RETAIN);
+        refreshLabel(objc_getAssociatedObject(w, &kInfoLine1Key), botLuma, NO);
+        refreshLabel(objc_getAssociatedObject(w, &kInfoLine2Key), botLuma, YES);
     }
 }
 
@@ -180,6 +243,26 @@ void kabelStyleTitlebar(void *win) {
             [tb addSubview:glass positioned:NSWindowBelow relativeTo:nil];
         }
         tb.alphaValue = w.keyWindow ? 1.0 : 0.0;
+
+        // Replace the system title (fixed colour, illegible over video) with
+        // our own centred label that recolours with the backdrop.
+        if (objc_getAssociatedObject(w, &kTitleLabelKey) == nil) {
+            w.titleVisibility = NSWindowTitleHidden;
+            // Click-through so it never blocks title-bar window dragging.
+            NSTextField *t = [[passthroughClass([NSTextField class]) alloc] initWithFrame:NSZeroRect];
+            t.editable = NO;
+            t.bordered = NO;
+            t.drawsBackground = NO;
+            t.selectable = NO;
+            t.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
+            t.alignment = NSTextAlignmentCenter;
+            t.frame = NSMakeRect(80, (tb.bounds.size.height - 18) / 2,
+                                 tb.bounds.size.width - 160, 18);
+            t.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin | NSViewMaxYMargin;
+            t.lineBreakMode = NSLineBreakByTruncatingTail;
+            [tb addSubview:t];
+            objc_setAssociatedObject(w, &kTitleLabelKey, t, OBJC_ASSOCIATION_RETAIN);
+        }
     }
 
     kabelSetupInfoBar(win);
