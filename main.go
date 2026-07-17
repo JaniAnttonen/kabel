@@ -79,8 +79,13 @@ func main() {
 		"network-timeout":        "10",
 		"cache":                  "yes",
 		"demuxer-readahead-secs": "2",
-		"volume":                 "100",
-		"volume-max":             "100",
+		// DVB broadcasts are 1080i: deinterlace (bwdif) when flagged, and
+		// smooth 50fps-vs-display judder with display-resample.
+		"deinterlace":   "auto",
+		"video-sync":    "display-resample",
+		"interpolation": "yes",
+		"volume":        "100",
+		"volume-max":    "100",
 	}
 	if logFile := os.Getenv("KABEL_MPV_LOG"); logFile != "" {
 		opts["log-file"] = logFile
