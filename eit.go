@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -274,6 +277,90 @@ func epgSweepMux(muxURL string) {
 	}
 	epgMu.Unlock()
 	log.Printf("epg: mux %s -> %d services", freq, len(updated))
+	saveEPGCache()
+}
+
+// EPG persistence: keep now/next data across restarts so the info bar has
+// something to show immediately instead of blank space until the first
+// sweep completes.
+
+var epgSaveMu sync.Mutex // serializes concurrent file writes
+
+func epgCachePath() (string, error) {
+	dir, err := cacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "epg.json"), nil
+}
+
+// loadEPGCache restores persisted events, dropping any that already ended.
+func loadEPGCache() {
+	path, err := epgCachePath()
+	if err != nil {
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	stored := map[string][]epgEvent{}
+	if json.Unmarshal(data, &stored) != nil {
+		return
+	}
+	cutoff := time.Now().Add(-time.Hour)
+	n := 0
+	epgMu.Lock()
+	for key, events := range stored {
+		var live []epgEvent
+		for _, e := range events {
+			if e.Start.Add(e.Dur).After(cutoff) {
+				live = append(live, e)
+			}
+		}
+		if len(live) > 0 {
+			epgData[key] = live
+			n += len(live)
+		}
+	}
+	epgMu.Unlock()
+	log.Printf("epg cache: %d events across %d services loaded", n, len(stored))
+}
+
+// saveEPGCache atomically writes the current store, pruning long-past events.
+func saveEPGCache() {
+	epgSaveMu.Lock()
+	defer epgSaveMu.Unlock()
+	path, err := epgCachePath()
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-time.Hour)
+	snapshot := map[string][]epgEvent{}
+	epgMu.RLock()
+	for key, events := range epgData {
+		var live []epgEvent
+		for _, e := range events {
+			if e.Start.Add(e.Dur).After(cutoff) {
+				live = append(live, e)
+			}
+		}
+		if len(live) > 0 {
+			snapshot[key] = live
+		}
+	}
+	epgMu.RUnlock()
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	tmp := path + ".tmp"
+	if os.WriteFile(tmp, data, 0o644) == nil {
+		_ = os.Rename(tmp, path)
+	}
 }
 
 func mergeEvents(existing, add []epgEvent) []epgEvent {
