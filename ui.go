@@ -175,7 +175,7 @@ func (ui *UI) updateInfoBar() {
 	}
 	c := ui.channels[ui.current]
 	line1, line2 := c.Name, ""
-	if now, next := epgNowNext(urlParam(c.URL, "freq"), serviceOf(c.URL)); now != nil || next != nil {
+	if now, next := nowNext(c); now != nil || next != nil {
 		hm := func(t time.Time) string { return t.Local().Format("15:04") }
 		if now != nil {
 			line1 = fmt.Sprintf("%s — %s   %s–%s", c.Name, now.Title, hm(now.Start), hm(now.Start.Add(now.Dur)))
@@ -234,6 +234,17 @@ func (ui *UI) refreshStatus() {
 	if ui.barShown {
 		infoBarStatus(ui.win, ui.composeStatus())
 	}
+}
+
+// nowNext returns the running/upcoming programme for a channel, preferring
+// authoritative DVB EIT and falling back to the XMLTV guide when the EIT has
+// nothing (channel not swept, no EIT carried, or box offline).
+func nowNext(c Channel) (now, next *epgEvent) {
+	now, next = epgNowNext(urlParam(c.URL, "freq"), serviceOf(c.URL))
+	if now == nil && next == nil {
+		now, next = xmltvNowNext(c.Name)
+	}
+	return now, next
 }
 
 func serviceOf(channelURL string) int {

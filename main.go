@@ -31,6 +31,7 @@ func main() {
 	log.SetFlags(log.Ltime)
 	loadPIDCache()
 	loadEPGCache()
+	startXMLTV(envOr("KABEL_XMLTV_URL", defaultXMLTVURL))
 	urlFlag := flag.String("url", envOr("KABEL_M3U", defaultM3UURL), "URL of the m3u channel list")
 	autoplay := flag.Bool("autoplay", false, "start playing the first channel immediately")
 	flag.Parse()

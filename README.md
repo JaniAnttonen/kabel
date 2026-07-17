@@ -55,9 +55,15 @@ source is unreachable.
 `-autoplay` starts the first channel immediately.
 
 While watching a local channel, a Liquid Glass bar at the bottom shows the
-current programme (title, times, description) and what's next, from the
-DVB EPG broadcast on the mux. It appears for a few seconds on channel
-changes and whenever the cursor is over the window.
+current programme (title, times, description) and what's next, plus a
+volume/audio/subtitle status line on the right. It appears for a few seconds
+on channel changes and whenever the cursor is over the window.
+
+Programme data comes primarily from the DVB EPG broadcast on each mux
+(authoritative, matches what's airing). Channels the broadcast EPG doesn't
+cover are filled from a public XMLTV guide (Finnish by default; override with
+`KABEL_XMLTV_URL`). Both are cached under `~/Library/Application Support/kabel/`
+so the bar has data immediately on restart.
 
 ### Keys
 
