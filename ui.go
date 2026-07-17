@@ -18,8 +18,7 @@ const (
 	panelWidth = 500
 	maxRows    = 20 // rows fit between header+status and footer at 28px each
 
-	listOverlayID   int64 = 1
-	volumeOverlayID int64 = 2
+	listOverlayID int64 = 1
 )
 
 // errorColor is the only accent in the UI (ASS BGR for system red #FF453A);
@@ -66,12 +65,6 @@ type UI struct {
 	panelPos *anim // panel slide: 0 = onscreen, -1 = offscreen
 	pillY    *anim // selection pill glide between rows
 
-	volShown     bool
-	volArc       *anim // displayed ring value sweep
-	volAlpha     *anim // ring fade in/out (0..1)
-	volDisplayed float64
-	volMuted     bool
-	volHideAt    time.Time
 }
 
 // anim is a single eased transition between two values.
@@ -344,22 +337,6 @@ func (ui *UI) tick() bool {
 		}
 		ui.render()
 		active = ui.panelPos != nil || ui.pillY != nil
-	}
-
-	if ui.volShown {
-		fading := ui.volAlpha != nil && ui.volAlpha.to == 0
-		switch {
-		case !ui.volArc.done(now) || (ui.volAlpha != nil && !ui.volAlpha.done(now)):
-			ui.renderVolume(now)
-			active = true
-		case fading:
-			ui.setOverlayID(volumeOverlayID, "none", "")
-			ui.volShown = false
-			ui.volArc, ui.volAlpha = nil, nil
-		case now.After(ui.volHideAt):
-			ui.volAlpha = newAnim(1, 0, 220*time.Millisecond)
-			active = true
-		}
 	}
 	return active
 }
@@ -799,8 +776,7 @@ func (ui *UI) handleKey(key glfw.Key, mods glfw.ModifierKey) {
 		ui.step(1)
 	case glfw.KeyM:
 		ui.command("cycle", "mute")
-		ui.showVolume()
-		ui.refreshStatus()
+		ui.flashVolume()
 	case glfw.KeyS:
 		ui.cycleSub()
 		ui.refreshStatus()
@@ -819,73 +795,18 @@ func (ui *UI) handleKey(key glfw.Key, mods glfw.ModifierKey) {
 
 func (ui *UI) addVolume(delta float64) {
 	ui.command("add", "volume", fmt.Sprintf("%.1f", delta))
-	ui.showVolume()
-	ui.refreshStatus()
+	ui.flashVolume()
 }
 
-// showVolume animates a circular volume indicator (progress ring with the
-// percentage centered) in the lower-right corner: fade in, sweep the arc to
-// the new value, fade out after a pause. tick() drives the frames.
-func (ui *UI) showVolume() {
-	vol, err := ui.m.GetProperty("volume", mpv.FormatDouble)
-	if err != nil {
+// flashVolume surfaces the bottom bar (which shows the volume in its status
+// line) for a couple of seconds, so volume/mute changes give feedback even
+// when the cursor isn't over the window.
+func (ui *UI) flashVolume() {
+	if ui.current < 0 {
 		return
 	}
-	v := vol.(float64)
-	muted := false
-	if mu, err := ui.m.GetProperty("mute", mpv.FormatFlag); err == nil {
-		muted, _ = mu.(bool)
-	}
-	now := time.Now()
-	cur := 0.0 // first appearance sweeps up from zero
-	if ui.volShown {
-		cur = ui.volArc.at(now)
-		if ui.volAlpha != nil && ui.volAlpha.to == 0 { // reverse a fade-out
-			ui.volAlpha = newAnim(ui.volAlpha.at(now), 1, 120*time.Millisecond)
-		}
-	} else {
-		ui.volAlpha = newAnim(0, 1, 120*time.Millisecond)
-	}
-	ui.volArc = newAnim(cur, v, 180*time.Millisecond)
-	ui.volDisplayed = v
-	ui.volMuted = muted
-	ui.volShown = true
-	ui.volHideAt = now.Add(1400 * time.Millisecond)
-	ui.renderVolume(now)
-}
-
-func (ui *UI) renderVolume(now time.Time) {
-	alpha := 1.0
-	if ui.volAlpha != nil {
-		alpha = ui.volAlpha.at(now)
-	}
-	ui.setOverlayID(volumeOverlayID, "ass-events", volumeASS(ui.volArc.at(now), ui.volMuted, alpha))
-}
-
-// volumeASS renders the indicator: backdrop disc, faint full ring, progress
-// arc from 12 o'clock, and the percentage (or mute mark) in the middle.
-// alpha (0..1) scales every element for the fade in/out.
-func volumeASS(v float64, muted bool, alpha float64) string {
-	const cx, cy = float64(osdResX - 100), float64(osdResY - 100)
-	const rOut, rIn = 46.0, 37.0
-	var b strings.Builder
-	fmt.Fprintf(&b, "{\\an7\\pos(0,0)\\bord0\\shad0\\1c&H101010&%s\\p1}%s{\\p0}\n",
-		alphaTag(0x38, alpha), circlePath(cx, cy, 58))
-	fmt.Fprintf(&b, "{\\an7\\pos(0,0)\\bord0\\shad0\\1c&H666666&%s\\p1}%s{\\p0}\n",
-		alphaTag(0x90, alpha), ringPath(cx, cy, rOut, rIn, 0, 360))
-	color := "&HFFFFFF&"
-	label := fmt.Sprintf("%.0f%%", v)
-	if muted {
-		color = "&H888888&"
-		label = "✕"
-	}
-	if v > 0 {
-		fmt.Fprintf(&b, "{\\an7\\pos(0,0)\\bord0\\shad0\\1c%s%s\\p1}%s{\\p0}\n",
-			color, alphaTag(0, alpha), ringPath(cx, cy, rOut, rIn, -90, -90+3.6*v))
-	}
-	fmt.Fprintf(&b, "{\\an5\\pos(%.0f,%.0f)\\bord0\\shad0\\fs24\\b1\\1c&HFFFFFF&%s}%s\n",
-		cx, cy, alphaTag(0, alpha), label)
-	return b.String()
+	ui.barUntil = time.Now().Add(2500 * time.Millisecond)
+	ui.refreshStatus()
 }
 
 // alphaTag combines an element's base ASS transparency (0 = opaque,
@@ -899,53 +820,6 @@ func alphaTag(base int, visible float64) string {
 	}
 	a := 255 - int(float64(255-base)*visible)
 	return fmt.Sprintf("\\1a&H%02X&", a)
-}
-
-// arcSegs approximates a circular arc from a0 to a1 (degrees) with cubic
-// béziers, one per quarter turn, as ASS drawing segments continuing from
-// the arc's start point.
-func arcSegs(cx, cy, r, a0deg, a1deg float64) string {
-	a0 := a0deg * math.Pi / 180
-	a1 := a1deg * math.Pi / 180
-	n := int(math.Ceil(math.Abs(a1-a0) / (math.Pi / 2)))
-	if n < 1 {
-		n = 1
-	}
-	step := (a1 - a0) / float64(n)
-	var sb strings.Builder
-	for i := 0; i < n; i++ {
-		s := a0 + float64(i)*step
-		e := s + step
-		k := 4.0 / 3.0 * math.Tan((e-s)/4)
-		x0, y0 := cx+r*math.Cos(s), cy+r*math.Sin(s)
-		x3, y3 := cx+r*math.Cos(e), cy+r*math.Sin(e)
-		fmt.Fprintf(&sb, "b %.1f %.1f %.1f %.1f %.1f %.1f ",
-			x0-k*r*math.Sin(s), y0+k*r*math.Cos(s),
-			x3+k*r*math.Sin(e), y3-k*r*math.Cos(e),
-			x3, y3)
-	}
-	return sb.String()
-}
-
-func circlePath(cx, cy, r float64) string {
-	return fmt.Sprintf("m %.1f %.1f %s", cx+r, cy, arcSegs(cx, cy, r, 0, 360))
-}
-
-// ringPath draws an annulus (full circle) or annular sector between the
-// outer and inner radii; the inner arc runs backwards so the fill winds
-// correctly and leaves the hole.
-func ringPath(cx, cy, rOut, rIn, a0, a1 float64) string {
-	if a1-a0 >= 360 {
-		return fmt.Sprintf("m %.1f %.1f %sm %.1f %.1f %s",
-			cx+rOut, cy, arcSegs(cx, cy, rOut, 0, 360),
-			cx+rIn, cy, arcSegs(cx, cy, rIn, 360, 0))
-	}
-	rad0, rad1 := a0*math.Pi/180, a1*math.Pi/180
-	return fmt.Sprintf("m %.1f %.1f %sl %.1f %.1f %s",
-		cx+rOut*math.Cos(rad0), cy+rOut*math.Sin(rad0),
-		arcSegs(cx, cy, rOut, a0, a1),
-		cx+rIn*math.Cos(rad1), cy+rIn*math.Sin(rad1),
-		arcSegs(cx, cy, rIn, a1, a0))
 }
 
 // handleScroll navigates the channel list while it is open and controls the
