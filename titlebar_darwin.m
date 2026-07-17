@@ -33,7 +33,8 @@ static void refreshLabel(NSTextField *tf, double luma, BOOL secondary) {
     sh.shadowBlurRadius = 3.0;
     sh.shadowOffset = NSMakeSize(0, -0.5);
     NSMutableParagraphStyle *ps = [[NSMutableParagraphStyle alloc] init];
-    ps.lineBreakMode = NSLineBreakByTruncatingTail;
+    ps.lineBreakMode = tf.lineBreakMode;
+    ps.alignment = tf.alignment; // else the attributed string forces natural (left)
     NSDictionary *attrs = @{
         NSForegroundColorAttributeName : [NSColor colorWithWhite:fg alpha:a],
         NSShadowAttributeName : sh,
